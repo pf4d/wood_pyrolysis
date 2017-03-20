@@ -1,9 +1,74 @@
-from pylab  import *
-from fenics import *
+from pylab    import *
+from fenics   import *
+from colored  import fg, attr
+from time     import time
 import ufl
 ufl.algorithms.apply_derivatives.CONDITIONAL_WORKAROUND = True
 
 parameters['form_compiler']['quadrature_degree'] = 2
+
+def print_text(text, color='white', atrb=0, cls=None):
+  """
+  Print text ``text`` from calling class ``cls`` to the screen.
+
+  :param text: the text to print
+  :param color: the color of the text to print
+  :param atrb: attributes to send use by ``colored`` package
+  :param cls: the calling class
+  :type text: string
+  :type color: string
+  :type atrb: int
+  :type cls: object
+  """
+  if cls is not None:
+    color = cls.color()
+  if MPI.rank(mpi_comm_world())==0:
+    if atrb != 0:
+      text = ('%s%s' + text + '%s') % (fg(color), attr(atrb), attr(0))
+    else:
+      text = ('%s' + text + '%s') % (fg(color), attr(0))
+    print text
+
+def print_min_max(u, title, color='97'):
+  """
+  Print the minimum and maximum values of ``u``, a Vector, Function, or array.
+
+  :param u: the variable to print the min and max of
+  :param title: the name of the function to print
+  :param color: the color of printed text
+  :type u: :class:`~fenics.GenericVector`, :class:`~numpy.ndarray`, :class:`~fenics.Function`, int, float, :class:`~fenics.Constant`
+  :type title: string
+  :type color: string
+  """
+  if isinstance(u, GenericVector):
+    uMin = MPI.min(mpi_comm_world(), u.min())
+    uMax = MPI.max(mpi_comm_world(), u.max())
+    s    = title + ' <min, max> : <%.3e, %.3e>' % (uMin, uMax)
+    print_text(s, color)
+  elif isinstance(u, ndarray):
+    if u.dtype != float64:
+      u = u.astype(float64)
+    uMin = MPI.min(mpi_comm_world(), u.min())
+    uMax = MPI.max(mpi_comm_world(), u.max())
+    s    = title + ' <min, max> : <%.3e, %.3e>' % (uMin, uMax)
+    print_text(s, color)
+  elif isinstance(u, Function):# \
+    #   or isinstance(u, dolfin.functions.function.Function):
+    uMin = MPI.min(mpi_comm_world(), u.vector().min())
+    uMax = MPI.max(mpi_comm_world(), u.vector().max())
+    s    = title + ' <min, max> : <%.3e, %.3e>' % (uMin, uMax)
+    print_text(s, color)
+  elif isinstance(u, int) or isinstance(u, float):
+    s    = title + ' : %.3e' % u
+    print_text(s, color)
+  elif isinstance(u, Constant):
+    s    = title + ' : %.3e' % u(0)
+    print_text(s, color)
+  else:
+    er = title + ": print_min_max function requires a Vector, Function" \
+         + ", array, int or float, not %s." % type(u)
+    print_text(er, 'red', 1)
+  
 
 # material parameters :
 R         = 8.3144      # universal gas constant
@@ -40,7 +105,7 @@ T1        = T_w + 20.0  # initial temperature
 
 # mesh parameters :
 L         = 0.005       # length
-N         = 1000        # spatial discretizations
+N         = 5000        # spatial discretizations
 order     = 2           # order of function space
 
 # time parameters :
@@ -78,10 +143,10 @@ U0   = Function(Q4, name='U0')
 dU   = TrialFunction(Q4)
 Phi  = TestFunction(Q4)
 
-Tp     = Function(Q)
-P_gp   = Function(Q)
-rho_vp = Function(Q)
-c_bp   = Function(Q)
+Tp     = Function(Q, name = 'T')
+P_gp   = Function(Q, name = 'P_g')
+rho_vp = Function(Q, name = 'rho_v')
+c_bp   = Function(Q, name = 'c_b')
 
 assT     = FunctionAssigner(Q, Q4.sub(0))
 assP_g   = FunctionAssigner(Q, Q4.sub(1))
@@ -269,18 +334,30 @@ J           = derivative(delta, U, dU)
 params      = {'newton_solver' :
                 {
                   'linear_solver'           : 'mumps',
-                  'relative_tolerance'      : 1e-8,
+                  #'preconditioner'          : 'hypre_amg',
+                  'absolute_tolerance'      : 1e-8,
+                  'relative_tolerance'      : 1e-5,
                   'relaxation_parameter'    : 1.0,
-                  'maximum_iterations'      : 3,
+                  'maximum_iterations'      : 10,
                   'error_on_nonconvergence' : False
                 }
               }
+ffc_options = {"optimize"               : True,
+               "eliminate_zeros"        : True,
+               "precompute_basis_const" : True,
+               "precompute_ip_const"    : True}
+
+problem = NonlinearVariationalProblem(delta, U, J=J, bcs=bcs,
+            form_compiler_parameters=ffc_options)
+solver = NonlinearVariationalSolver(problem)
+solver.parameters.update(params)
+
 
 # set up visualization :
-Tf1     = Function(Q1)
-P_gf1   = Function(Q1)
-rho_vf1 = Function(Q1)
-c_bf1   = Function(Q1)
+Tf1     = Function(Q1, name = 'Tf1')
+P_gf1   = Function(Q1, name = 'P_gf1')
+rho_vf1 = Function(Q1, name = 'rho_vf1')
+c_bf1   = Function(Q1, name = 'c_bf1')
 
 Tf1.interpolate(Ti)
 P_gf1.interpolate(P_gi)
@@ -351,36 +428,40 @@ ax4.grid()
 
 plt.tight_layout()
 plt.show()
+    
 
-# time stepping :
-while t < tf:
+def solve_and_plot():
 
-  # solve :
-  #params['newton_solver']['relative_tolerance'] = 1e-8
-  solve(delta == 0, U, bcs, J=J, solver_parameters=params)
+  # solve nonlinear system :
+  rtol   = params['newton_solver']['relative_tolerance']
+  maxit  = params['newton_solver']['maximum_iterations']
+  alpha  = params['newton_solver']['relaxation_parameter']
+  s      = "::: solving problem with %i max iterations" + \
+           " and step size = %.1f :::"
+  print_text(s % (maxit, alpha), 'dark_orange_3a')
+  
+  # compute solution :
+  #solve(delta == 0, U, bcs, J=J, solver_parameters=params)
+  out = solver.solve()
 
   # set the previous solution :
   U0.assign(U)
-
-  # increment time step :
-  t += dt
-
-  # increment time in boundary conditions:
-  T_inf.t   = t
-  rho_v_inf = t
 
   assT.assign(Tp,         U.sub(0))
   assP_g.assign(P_gp,     U.sub(1))
   assrho_v.assign(rho_vp, U.sub(2))
   assc_b.assign(c_bp,     U.sub(3))
 
-  print Tp.vector().min(),     Tp.vector().max()
-  print P_gp.vector().min(),   P_gp.vector().max()
-  print rho_vp.vector().min(), rho_vp.vector().max()
-  print c_bp.vector().min(),   c_bp.vector().max()
-  print "t:", t
+  print_min_max(Tp,     'T')
+  print_min_max(P_gp,   'P_g')
+  print_min_max(rho_vp, 'rho_v')
+  print_min_max(c_bp,   'c_b')
 
   if order != 1:
+    Tf1     = Function(Q1, name = 'Tf1')
+    P_gf1   = Function(Q1, name = 'P_gf1')
+    rho_vf1 = Function(Q1, name = 'rho_vf1')
+    c_bf1   = Function(Q1, name = 'c_bf1')
     Tf1.interpolate(Tp)
     P_gf1.interpolate(P_gp)
     rho_vf1.interpolate(rho_vp)
@@ -412,6 +493,95 @@ while t < tf:
   rplt.set_ydata(rho_vf) 
   plt.draw()
   plt.pause(0.00000001)
+
+  return out
+
+
+
+stars = "*****************************************************************"
+t0              = time()
+step_time       = []
+initial_dt      = dt
+initial_alpha   = params['newton_solver']['relaxation_parameter']
+adaptive        = True
+
+# Loop over all times
+while t < tf:
+
+  # start the timer :
+  tic = time()
+  
+  ## solve equation, lower alpha on failure :
+  #if adaptive:
+  #  solved_u = False
+  #  par    = params['newton_solver']
+  #  while not solved_u:
+  #    if par['relaxation_parameter'] < 0.2:
+  #      status_u = [False, False]
+  #      break
+  #    status_u = solve_and_plot()
+  #    solved_u = status_u[1]
+  #    if not solved_u:
+  #      par['relaxation_parameter'] /= 1.43
+  #      print_text(stars, 'red', 1)
+  #      s = ">>> WARNING: newton relaxation parameter lowered to %g <<<"
+  #      print_text(s % par['relaxation_parameter'], 'red', 1)
+  #      print_text(stars, 'red', 1)
+
+  # solve mass equations, lowering time step on failure :
+  if adaptive:
+    par    = params['newton_solver']
+    solved_h = False
+    while not solved_h:
+      if dt < DOLFIN_EPS:
+        status_h = [False,False]
+        break
+      U_temp   = U.copy(True)
+      U0_temp  = U0.copy(True)
+      status_h = solve_and_plot()
+      solved_h = status_h[1]
+      if not solved_h:
+        dt /= 2.0
+        print_text(stars, 'red', 1)
+        s = ">>> WARNING: time step lowered to %g <<<"
+        print_text(s % dt, 'red', 1)
+        U.assign(U_temp)
+        U0.assign(U0_temp)
+        print_text(stars, 'red', 1)
+
+  # solve :
+  else:
+    solve_and_plot()
+
+  # increment time step :
+  s = '>>> Time: %g s, CPU time for last dt: %.3f s <<<'
+  print_text(s % (t+dt, time()-tic), 'red', 1)
+
+  t += dt
+  step_time.append(time() - tic)
+
+  # increment time in boundary conditions:
+  T_inf.t   = t
+  rho_v_inf = t
+  
+  # for the subsequent iteration, reset the parameters to normal :
+  if adaptive:
+    if par['relaxation_parameter'] != initial_alpha:
+      print_text("::: resetting alpha to normal :::", 'green')
+      par['relaxation_parameter'] = initial_alpha
+    if dt != initial_dt:
+      print_text("::: resetting dt to normal :::", 'green')
+      dt = initial_dt
+  
+
+# calculate total time to compute
+sec = time() - t0
+mnn = sec / 60.0
+hor = mnn / 60.0
+sec = sec % 60
+mnn = mnn % 60
+text = "total time to perform transient run: %02d:%02d:%02d" % (hor,mnn,sec)
+print_text(text, 'red', 1)
 
 plt.ioff()
 plt.show()
