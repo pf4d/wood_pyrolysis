@@ -438,7 +438,7 @@ def L_rho_a(u):   return J_a(T_mid, u, rho_v_mid).dx(0)
 delta_P_g   = + eps_g * drho_adt * kappa * dx \
               - J_a(T_mid, P_g_mid, rho_v_mid) * kappa.dx(0) * dx \
               + J_a(T_mid, P_g_mid, rho_v_mid) * kappa * Constant(-1) * ds(1) \
-#              + J_a(T_mid, P_g_mid, rho_v_mid) * kappa * Constant(1)  * ds(2) \
+              + J_a(T_mid, P_g_mid, rho_v_mid) * kappa * Constant(1)  * ds(2) \
 #              + inner(L_rho_adv(xi), tau_rho*L_rho_a(P_g_mid)) * dx
 
 # mixed formulation :
@@ -539,7 +539,7 @@ ax3.grid()
 
 ax4.set_title('Vapour concentration')
 ax4.set_xlabel(r'$x$ [cm]')
-ax4.set_ylabel(r'$\rho_v$ [kg/m^3]')
+ax4.set_ylabel(r'$\rho_v$ [kg/m$^3$]')
 ax4.grid()
 
 plt.tight_layout()
