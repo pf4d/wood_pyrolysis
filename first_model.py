@@ -219,19 +219,6 @@ c_bi   = interpolate(Constant(c_b1),   Q)
 assign(U,  [Ti, P_gi, rho_vi, c_bi])
 assign(U0, [Ti, P_gi, rho_vi, c_bi])
 
-#m     = c_b_mid / rho_0                    # moisture content
-#k     = 0.14 + 0.3 * m                     # thermal conductivity (Turner 2010)
-#E_b   = (38.5 - 29*m) * 1e3                # bound water activation energy
-#D_b   = D_T0 * exp(- E_b / (R*T_mid) )     # bound water diffusion
-#D_bT  = D_b * c_b_mid*E_b / (R*T_mid**2)   # bound water temperature diffusion
-#mu_g  = 7.85e-6 + 2.62e-8 * T_mid          # viscosity of gas mixture
-#v_g   = K * K_g / mu_g * P_g_mid.dx(0)     # gas velocity
-#D_av  = zeta * a * T_mid**b / P_g_mid * c  # diff. coef. of air -> w. vapour
-#P_v   = R_v * rho_v_mid * T_mid            # partial vapor pressure
-#P_a   = P_g_mid - P_v                      # partial air pressure
-#rho_a = P_a / (R_a * T_mid)                # concentration of air vapour
-#rho_g = rho_v_mid + rho_a                  # gas mixture concentration
-
 # moisture content :
 def m(c_b):
   return c_b / rho_0
@@ -300,7 +287,6 @@ def H_c(T, rho_v, c_b):
   H_c_n = conditional(le(c_b, c_bl(T, rho_v)), \
                       C_1*exp(-C_2*(    c_b/c_bl(T, rho_v))**C_3) + C_4, \
                       C_1*exp(-C_2*(2 - c_b/c_bl(T, rho_v))**C_3) + C_4 )
-  #H_c_n =             C_1*exp(-C_2*(c_b/c_bl(T, rho_v)))**C_3) + C_4
   return H_c_n
 
 # sorption rate :
@@ -308,14 +294,7 @@ def cdot(T, rho_v, c_b):
   cdot_n = conditional( le(T, T_boil), \
                         H_c(T, rho_v, c_b)*(c_bl(T, rho_v) - c_b), \
                         H_c(T, rho_v, c_b)*(0 - c_b) )
-  #cdot  = H_c*(c_bl - c_b)
   return cdot_n
-
-# discrete time derivative of sorption rate :
-dcdotdt   = ( cdot(T, rho_v, c_b) - cdot(T0, rho_v0, c_b0) ) / dt
-
-# midpoint values of sorption rate :
-cdot_mid  = eta*cdot(T, rho_v, c_b) + (1 - eta)*cdot(T0, rho_v0, c_b0)
 
 # flux of bound water :
 def J_b(T, c_b):
@@ -340,25 +319,6 @@ def J_v(T, P_g, rho_v):
   return J_v_n
 
 
-## flux of bound water, air, and vapour :
-#J_b   = - D_b * c_b_mid.dx(0) \
-#        - D_bT * T_mid.dx(0)
-#J_a   = + eps_g * rho_a * v_g \
-#        - eps_g * rho_g * D_av * (rho_a / rho_g).dx(0)
-#J_v   = + eps_g * rho_v_mid * v_g \
-#        - eps_g * rho_g * D_av * (rho_v_mid / rho_g).dx(0)
-#
-#K_VT  = (D_av * eps_g * P_g_mid * rho_v_mid) / (R_a * T_mid**2 * rho_g)
-#K_VP  = eps_g * rho_v_mid * ((K * K_g / mu_g - D_av)/(R_a * T_mid * rho_g))
-#K_W   = D_av * eps_g / rho_g * (rho_a + R_v / R_a * rho_v_mid)
-#J_v   = - K_VT * T_mid.dx(0) - K_VP * P_g_mid.dx(0) - K_W * rho_v_mid.dx(0)
-#
-#K_AT  = (D_av * eps_g * P_g_mid * rho_v_mid) / (R_a * T_mid**2 * rho_g)
-#K_AP  = + K * K_g / mu_g * eps_g * rho_a \
-#        + (D_av * eps_g * rho_v_mid) / (R_a * T_mid * rho_g)
-#K_AV  = D_av * eps_g / rho_g * (- rho_a - R_v / R_a * rho_v_mid)
-#J_a   = K_AT * T_mid.dx(0) - K_AP * P_g_mid.dx(0) - K_AV * rho_v_mid.dx(0)
-
 # boundary conditions :
 h_c   = alpha_c * (T_inf - T_mid)
 h_r   = sigma * eps_m * eps_f * (T_inf**4 - T_mid**4)
@@ -372,6 +332,12 @@ conv        = + C_b*J_b(T_mid, c_b_mid) \
               - k(c_b_mid).dx(0) + 1e-10
 Pe_T        = h * conv / (2*k(c_b_mid))
 tau_T       = h / (2*conv) * (1/tanh(Pe_T) - 1 /Pe_T)
+
+# discrete time derivative of sorption rate :
+dcdotdt   = ( cdot(T, rho_v, c_b) - cdot(T0, rho_v0, c_b0) ) / dt
+
+# midpoint values of sorption rate :
+cdot_mid  = eta*cdot(T, rho_v, c_b) + (1 - eta)*cdot(T0, rho_v0, c_b0)
 
 def L_T_adv(u):
   Lu = ( + C_b*J_b(u, c_b_mid) \
