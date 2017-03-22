@@ -104,15 +104,16 @@ P_g1      = 1e5         # initial gas pressure
 T1        = T_w + 20.0  # initial temperature
 
 # mesh parameters :
-L         = 0.005       # length
-N         = 5000        # spatial discretizations
+L         = 0.01        # length
+N         = 200         # spatial discretizations
 order     = 2           # order of function space
 
 # time parameters :
-dt        = 1.0         # time step
+dt        = 0.1         # time step
 t0        = 0.0         # start time
 t         = t0          # current time
-tf        = 56.0        # final time
+tf        = 160.0       # final time
+eta       = 1           # time-step parameter
 
 # sorption parameters :
 b_10d     = 16.3
@@ -124,11 +125,6 @@ C_21      = 2.74e-5
 C_22      = 19.0
 C_3       = 60.0
 C_4       = 1e-7
-
-# diffusion coefficient parameters :
-a         = 1.87
-b         = 2.072
-c         = 1e-5
 
 # function spaces : 
 mesh = IntervalMesh(N, 0, L)
@@ -207,8 +203,7 @@ T0,  P_g0,  rho_v0, c_b0    = U0
 dT,  dP_g,  drho_v, dc_b    = dU
 phi, psi,   xi,     kappa   = Phi
 
-# time-step parameter (Crank-Nicolson) and midpoint values :
-eta       = 0.5
+# midpoint values :
 T_mid     = eta*T     + (1 - eta)*T0
 c_b_mid   = eta*c_b   + (1 - eta)*c_b0
 rho_v_mid = eta*rho_v + (1 - eta)*rho_v0
@@ -224,30 +219,135 @@ c_bi   = interpolate(Constant(c_b1),   Q)
 assign(U,  [Ti, P_gi, rho_vi, c_bi])
 assign(U0, [Ti, P_gi, rho_vi, c_bi])
 
-m     = c_b_mid / rho_0                    # moisture content
-k     = 0.14 + 0.3 * m                     # thermal conductivity (Turner 2010)
-E_b   = (38.5 - 29*m) * 1e3                # bound water activation energy
-D_b   = D_T0 * exp(- E_b / (R*T_mid) )     # bound water diffusion
-D_bT  = D_b * c_b_mid*E_b / (R*T_mid**2)   # bound water temperature diffusion
-mu_g  = 7.85e-6 + 2.62e-8 * T_mid          # viscosity of gas mixture
-v_g   = K * K_g / mu_g * P_g_mid.dx(0)     # gas velocity
-D_av  = zeta * a * T_mid**b / P_g_mid * c  # diff. coef. of air -> w. vapour
-P_v   = R_v * rho_v_mid * T_mid            # partial vapor pressure
-P_a   = P_g_mid - P_v                      # partial air pressure
-rho_a = P_a / (R_a * T_mid)                # concentration of air vapour
-rho_g = rho_v_mid + rho_a                  # gas mixture concentration
-P_s   = exp(24.1201 - 4671.3545 / T_mid)   # saturated vapour pressure
-h_m   = P_v / P_s                          # relative humidity
-C_2   = C_21 * exp(C_22*h_m)               # another coefficent
+#m     = c_b_mid / rho_0                    # moisture content
+#k     = 0.14 + 0.3 * m                     # thermal conductivity (Turner 2010)
+#E_b   = (38.5 - 29*m) * 1e3                # bound water activation energy
+#D_b   = D_T0 * exp(- E_b / (R*T_mid) )     # bound water diffusion
+#D_bT  = D_b * c_b_mid*E_b / (R*T_mid**2)   # bound water temperature diffusion
+#mu_g  = 7.85e-6 + 2.62e-8 * T_mid          # viscosity of gas mixture
+#v_g   = K * K_g / mu_g * P_g_mid.dx(0)     # gas velocity
+#D_av  = zeta * a * T_mid**b / P_g_mid * c  # diff. coef. of air -> w. vapour
+#P_v   = R_v * rho_v_mid * T_mid            # partial vapor pressure
+#P_a   = P_g_mid - P_v                      # partial air pressure
+#rho_a = P_a / (R_a * T_mid)                # concentration of air vapour
+#rho_g = rho_v_mid + rho_a                  # gas mixture concentration
 
-# flux of bound water, air, and vapour :
-J_b   = - D_b * c_b_mid.dx(0) \
-        - D_bT * T_mid.dx(0)
-J_a   = + eps_g * rho_a * v_g \
-        - eps_g * rho_g * D_av * (rho_a / rho_g).dx(0)
-J_v   = + eps_g * rho_v_mid * v_g \
-        - eps_g * rho_g * D_av * (rho_v_mid / rho_g).dx(0)
+# moisture content :
+def m(c_b):
+  return c_b / rho_0
 
+# thermal conductivity (Turner 2010) :
+def k(c_b):
+  return 0.14 + 0.3 * m(c_b)
+
+# bound water activation energy :
+def E_b(c_b):
+  return (38.5 - 29*m(c_b)) * 1e3
+
+# bound water diffusion:
+def D_b(T, c_b):
+  return D_T0 * exp(- E_b(c_b) / (R*T))
+
+# bound water temperature diffusion :
+def D_bT(T, c_b):
+  return D_b(T, c_b) * c_b * E_b(c_b) / (R*T**2)
+
+# viscosity of gas mixture :
+def mu_g(T):
+  return 7.85e-6 + 2.62e-8 * T
+
+# gas velocity :
+def v_g(T, P_g):
+  return K * K_g / mu_g(T) * P_g.dx(0)
+
+# diffusion coefficient of air -> water vapor :
+def D_av(T, P_g):
+  return zeta * 1.87 * T**2.072 / P_g * 1e-5
+
+# partial vapor pressure :
+def P_v(T, rho_v):
+  return R_v * rho_v * T
+
+# partial air pressure :
+def P_a(T, rho_v, P_g):
+  return P_g - P_v(T, rho_v)
+
+# concentration of air vapour :
+def rho_a(T, P_g, rho_v):
+  return P_a(T, rho_v, P_g) / (R_a * T)
+
+# gas mixture concentration :
+def rho_g(T, P_g, rho_v):
+  return rho_v + rho_a(T, P_g, rho_v)
+
+# saturated vapor pressure (Gronli p119) :
+def P_s(T):
+  return exp(24.1201 - 4671.3545 / T)
+
+# relative humidity :
+def h_m(T, rho_v):
+  return P_v(T, rho_v) / P_s(T)
+
+# equilibrium moisture content :
+def c_bl(T, rho_v):
+  f_1   = b_10d + b_11d*T
+  f_2   = b_20d + b_21d*T
+  return ln( ln(1/h_m(T, rho_v))/f_1 ) / f_2 * rho_0
+  
+  # reaction rate function :
+def H_c(T, rho_v, c_b):
+  C_2   = C_21 * exp(C_22*h_m(T, rho_v))   # another coefficent
+  H_c_n = conditional(le(c_b, c_bl(T, rho_v)), \
+                      C_1*exp(-C_2*(    c_b/c_bl(T, rho_v))**C_3) + C_4, \
+                      C_1*exp(-C_2*(2 - c_b/c_bl(T, rho_v))**C_3) + C_4 )
+  #H_c_n =             C_1*exp(-C_2*(c_b/c_bl(T, rho_v)))**C_3) + C_4
+  return H_c_n
+
+# sorption rate :
+def cdot(T, rho_v, c_b):
+  cdot_n = conditional( le(T, T_boil), \
+                        H_c(T, rho_v, c_b)*(c_bl(T, rho_v) - c_b), \
+                        H_c(T, rho_v, c_b)*(0 - c_b) )
+  #cdot  = H_c*(c_bl - c_b)
+  return cdot_n
+
+# discrete time derivative of sorption rate :
+dcdotdt   = ( cdot(T, rho_v, c_b) - cdot(T0, rho_v0, c_b0) ) / dt
+
+# midpoint values of sorption rate :
+cdot_mid  = eta*cdot(T, rho_v, c_b) + (1 - eta)*cdot(T0, rho_v0, c_b0)
+
+# flux of bound water :
+def J_b(T, c_b):
+  return - D_b(T, c_b)*c_b.dx(0) - D_bT(T, c_b)*T.dx(0)
+
+# thermal conductivity :
+def k(c_b):
+  return 0.14 + 0.3 * m(c_b)
+
+# flux of air :
+def J_a(T, P_g, rho_v):
+  J_a_n = + eps_g * rho_a(T, P_g, rho_v) * v_g(T, P_g) \
+          - eps_g * rho_g(T, P_g, rho_v) \
+          * D_av(T, P_g) * (rho_a(T, P_g, rho_v) / rho_g(T, P_g, rho_v)).dx(0)
+  return J_a_n
+
+# flux of vapor :
+def J_v(T, P_g, rho_v):
+  J_v_n = + eps_g * rho_v * v_g(T, P_g) \
+          - eps_g * rho_g(T, P_g, rho_v) \
+          * D_av(T, P_g) * (rho_v / rho_g(T, P_g, rho_v)).dx(0)
+  return J_v_n
+
+
+## flux of bound water, air, and vapour :
+#J_b   = - D_b * c_b_mid.dx(0) \
+#        - D_bT * T_mid.dx(0)
+#J_a   = + eps_g * rho_a * v_g \
+#        - eps_g * rho_g * D_av * (rho_a / rho_g).dx(0)
+#J_v   = + eps_g * rho_v_mid * v_g \
+#        - eps_g * rho_g * D_av * (rho_v_mid / rho_g).dx(0)
+#
 #K_VT  = (D_av * eps_g * P_g_mid * rho_v_mid) / (R_a * T_mid**2 * rho_g)
 #K_VP  = eps_g * rho_v_mid * ((K * K_g / mu_g - D_av)/(R_a * T_mid * rho_g))
 #K_W   = D_av * eps_g / rho_g * (rho_a + R_v / R_a * rho_v_mid)
@@ -259,71 +359,87 @@ J_v   = + eps_g * rho_v_mid * v_g \
 #K_AV  = D_av * eps_g / rho_g * (- rho_a - R_v / R_a * rho_v_mid)
 #J_a   = K_AT * T_mid.dx(0) - K_AP * P_g_mid.dx(0) - K_AV * rho_v_mid.dx(0)
 
-# equilibrium moisture content :
-f_1   = b_10d + b_11d*T_mid
-f_2   = b_20d + b_21d*T_mid
-c_bl  = ln( ln(1/h_m)/f_1 ) / f_2 * rho_0
-
-# reaction rate function :
-H_c   = conditional(le(c_b_mid, c_bl), \
-                    C_1*exp(-C_2*(    c_b_mid/c_bl)**C_3) + C_4, \
-                    C_1*exp(-C_2*(2 - c_b_mid/c_bl)**C_3) + C_4 )
-
-# sorption rate :
-cdot  = conditional( le(T, T_boil), H_c*(c_bl - c_b_mid), H_c*(0 - c_b_mid) )
-#cdot = Constant(0.0)
-
 # boundary conditions :
 h_c   = alpha_c * (T_inf - T_mid)
 h_r   = sigma * eps_m * eps_f * (T_inf**4 - T_mid**4)
 kdTdn = h_c + h_r
 J_vdn = - beta * (rho_v_inf - rho_v_mid)
 
-## for SUPG :
-##Pe  = h * d / (2*kappa)
-##tau = h / (2*d) * (1/tanh(Pe) - 1 / Pe)
-#
-## for GLS or SSM :
-#tau = 1 / (4*kappa/h**2 + 2*d/h + s)
-#
-#def L(u):       return -(kappa * u.dx(0)).dx(0) + d*u.dx(0) + s*u  # GLS
-#def L_star(u):  return -(kappa * u.dx(0)).dx(0) - d*u.dx(0) + s*u  # SSM
-#def L_adv(u):   return d*u.dx(0)                                   # SUPG
-
-
 # energy residual :
+conv        = + C_b*J_b(T_mid, c_b_mid) \
+              + C_v*J_v(T_mid, P_g_mid, rho_v_mid) \
+              + C_a*J_a(T_mid, P_g_mid, rho_v_mid) \
+              - k(c_b_mid).dx(0) + 1e-10
+Pe_T        = h * conv / (2*k(c_b_mid))
+tau_T       = h / (2*conv) * (1/tanh(Pe_T) - 1 /Pe_T)
+
+def L_T_adv(u):
+  Lu = ( + C_b*J_b(u, c_b_mid) \
+         + C_v*J_v(u, P_g_mid, rho_v_mid) \
+         + C_a*J_a(u, P_g_mid, rho_v_mid) - k(c_b_mid).dx(0)) * u.dx(0)
+  return Lu
+
+def L_T(u):  
+  Lu = + (k(c_b_mid) * u.dx(0)).dx(0) \
+       - DH_s * cdot(u, rho_v_mid, c_b_mid) \
+       - ( + C_b*J_b(u, c_b_mid) \
+           + C_v*J_v(u, P_g_mid, rho_v_mid) \
+           + C_a*J_a(u, P_g_mid, rho_v_mid) ) * u.dx(0)
+  return Lu
+
 dTdt        = (T - T0) / dt
-delta_T     = + ( + eps_g * rho_a * C_a \
+delta_T     = + ( + eps_g * rho_a(T_mid, P_g_mid, rho_v_mid) * C_a \
                   + eps_g * rho_v * C_v \
-                  + c_b * C_b \
+                  + c_b_mid * C_b \
                   + rho_0 * C_0 ) * dTdt * phi * dx \
-              + DH_s * cdot * phi * dx \
-              + ( C_b*J_b + C_v*J_v + C_a*J_a ) * T_mid.dx(0) * phi * dx \
-              + k * T_mid.dx(0) * phi.dx(0) * dx \
-              - kdTdn * phi * ds(1)
+              + DH_s * cdot_mid * phi * dx \
+              + conv * T_mid.dx(0) * phi * dx \
+              + k(c_b_mid) * T_mid.dx(0) * phi.dx(0) * dx \
+              - kdTdn * phi * ds(1) \
+#              + inner(L_T_adv(phi), tau_T*L_T(T_mid)) * dx
 
 # bound water residual :
 dc_bdt      = (c_b - c_b0) / dt
+kappa_c     = D_b(T_mid, c_b_mid) + 1e-10
+d_c         = D_b(T_mid, c_b_mid).dx(0) + 1e-10
+s_c         = - D_b(T_mid, c_b_mid) * E_b(c_b) \
+              * (T_mid.dx(0).dx(0)) / (R*T_mid**2)
+Pe_c        = h * d_c / (2*kappa_c)
+tau_c       = 1 / (4*kappa_c/h**2 + 2*d_c/h + s_c)
+def L_c(u):      return J_b(T_mid, u).dx(0)
+def L_c_adv(u):  return u * d_c.dx(0) + d_c * u.dx(0)
 delta_c_b   = + dc_bdt * psi * dx \
-              - J_b * psi.dx(0) * dx \
-              - cdot * psi * dx
+              - J_b(T_mid, c_b_mid) * psi.dx(0) * dx \
+              - cdot_mid * psi * dx \
+#              + inner(L_c_adv(xi), tau_c*L_c(c_b_mid)) * dx \
+#              - inner(L_c_adv(xi), tau_c*cdot_mid) * dx
 
 # water vapor residual :
 drho_vdt    = (rho_v - rho_v0) / dt
+kappa_rho   = eps_g * rho_g(T, P_g, rho_v) * D_av(T_mid, P_g_mid)
+d_rho       = eps_g * v_g(T_mid, P_g_mid) + 1e-10
+Pe_rho      = h * d_rho / (2*kappa_rho)
+tau_rho     = h / (2*d_rho) * (1/tanh(Pe_rho) - 1 / Pe_rho)
+def L_rho_v(u):    return J_v(T_mid, P_g_mid, u).dx(0)
+def L_rho_adv(u):  return u * d_rho.dx(0) + d_rho * u.dx(0)
 delta_rho_v = + eps_g * drho_vdt * xi * dx \
-              - J_v * xi.dx(0) * dx \
+              - J_v(T_mid, P_g_mid, rho_v_mid) * xi.dx(0) * dx \
               + J_vdn * xi * ds(1) \
-              + cdot * xi * dx
+              + cdot_mid * xi * dx \
+#              + inner(L_rho_adv(xi), tau_rho*L_rho_v(c_b_mid)) * dx \
+#              - inner(L_rho_adv(xi), tau_rho*cdot_mid) * dx
 
 # gas pressure residual :
 dP_gdt      = (P_g - P_g0) / dt
 drho_adt    = + 1 / (R_a*T_mid) * dP_gdt \
-              - 1 / (R_a*T_mid**2) * dTdt * P_g_mid \
+              - P_g_mid / (R_a*T_mid**2) * dTdt \
               - R_v / R_a * drho_vdt
+def L_rho_a(u):   return J_a(T_mid, u, rho_v_mid).dx(0)
 delta_P_g   = + eps_g * drho_adt * kappa * dx \
-              - J_a * kappa.dx(0) * dx \
-              + J_a * kappa * Constant(-1) * ds(1) \
-              + J_a * kappa * Constant(1)  * ds(2)
+              - J_a(T_mid, P_g_mid, rho_v_mid) * kappa.dx(0) * dx \
+              + J_a(T_mid, P_g_mid, rho_v_mid) * kappa * Constant(-1) * ds(1) \
+#              + J_a(T_mid, P_g_mid, rho_v_mid) * kappa * Constant(1)  * ds(2) \
+#              + inner(L_rho_adv(xi), tau_rho*L_rho_a(P_g_mid)) * dx
 
 # mixed formulation :
 delta       = delta_T + delta_c_b + delta_rho_v + delta_P_g
