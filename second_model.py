@@ -1,6 +1,5 @@
 from pylab    import *
 from fenics   import *
-from colored  import fg, attr
 from time     import time
 from helper   import print_text, print_min_max
 import ufl
@@ -38,9 +37,10 @@ rho_v_max = 0.009       # maximum ambient water vapour concentration
 # initial conditions :
 rho_0     = 445.0       # initial timber density
 c_b1      = 53.4        # initial bound water concentration
-rho_v1    = 0.009       # initial water vapour concentration
+rho_v1    = 0.009       # initial water vapor concentration
 P_g1      = 1e5         # initial gas pressure
 T1        = T_w + 20.0  # initial temperature
+rho_a1    = P_g1 / (R_a * T1) - R_v * rho_v1 / R_a  # initial air concentration
 
 # mesh parameters :
 L         = 0.1         # length
@@ -51,7 +51,7 @@ order     = 2           # order of function space
 dt        = 0.1         # time step
 t0        = 0.0         # start time
 t         = t0          # current time
-tf        = 60.0 * 60.0 # final time
+tf        = 60.0*60.0   # final time
 eta       = 1           # time-step parameter
 
 # sorption parameters :
@@ -79,12 +79,12 @@ dU   = TrialFunction(Q4)
 Phi  = TestFunction(Q4)
 
 Tp     = Function(Q, name = 'T')
-P_gp   = Function(Q, name = 'P_g')
+rho_ap = Function(Q, name = 'rho_a')
 rho_vp = Function(Q, name = 'rho_v')
 c_bp   = Function(Q, name = 'c_b')
 
 assT     = FunctionAssigner(Q, Q4.sub(0))
-assP_g   = FunctionAssigner(Q, Q4.sub(1))
+assrho_a = FunctionAssigner(Q, Q4.sub(1))
 assrho_v = FunctionAssigner(Q, Q4.sub(2))
 assc_b   = FunctionAssigner(Q, Q4.sub(3))
 
@@ -121,6 +121,10 @@ class Right(SubDomain):
   def inside(self, x, on_boundary):
     return on_boundary and abs(x[0] - L) < 1e-14
 
+rho_a_inf = Expression('P_g_inf / (R_a * Tp) - R_v * rho_v / R_a', \
+                       P_g_inf=P_g_inf, R_a=R_a, R_v=R_v, Tp=T1, rho_v=rho_v1, \
+                       element=Qe)
+
 left  = Left()
 right = Right()
 ff    = FacetFunction('uint', mesh)
@@ -130,33 +134,31 @@ left.mark(ff, 1)
 right.mark(ff, 2)
 
 # gas pressure is only essential boundary :
-P_g_bc   = DirichletBC(Q4.sub(1), P_g_inf, left)
-c_b_bc   = DirichletBC(Q4.sub(3), 0.0,     left)
-rho_v_bc = DirichletBC(Q4.sub(2), 0.0,     left)
-bcs      = [P_g_bc, c_b_bc]
+rho_a_bc = DirichletBC(Q4.sub(1), rho_a_inf, left)
+c_b_bc   = DirichletBC(Q4.sub(3), 0.0,       left)
+bcs      = [rho_a_bc, c_b_bc]
 
 # temperature, gas pressure, concentration of water vapor, and 
 # and concentration of bound water :
-T,   P_g,   rho_v,  c_b     = U
-T0,  P_g0,  rho_v0, c_b0    = U0
-dT,  dP_g,  drho_v, dc_b    = dU
-phi, psi,   xi,     kappa   = Phi
+T,   rho_a,   rho_v,  c_b     = U
+T0,  rho_a0,  rho_v0, c_b0    = U0
+phi, psi,     xi,     kappa   = Phi
 
 # midpoint values :
 T_mid     = eta*T     + (1 - eta)*T0
-c_b_mid   = eta*c_b   + (1 - eta)*c_b0
+rho_a_mid = eta*rho_a + (1 - eta)*rho_a0
 rho_v_mid = eta*rho_v + (1 - eta)*rho_v0
-P_g_mid   = eta*P_g   + (1 - eta)*P_g0
+c_b_mid   = eta*c_b   + (1 - eta)*c_b0
 
 # set initial conditions:
 Ti     = interpolate(Constant(T1),     Q)
-P_gi   = interpolate(Constant(P_g1),   Q)
+rho_ai = interpolate(Constant(rho_a1), Q)
 rho_vi = interpolate(Constant(rho_v1), Q)
 c_bi   = interpolate(Constant(c_b1),   Q)
 
 # assign initial values :
-assign(U,  [Ti, P_gi, rho_vi, c_bi])
-assign(U0, [Ti, P_gi, rho_vi, c_bi])
+assign(U,  [Ti, rho_ai, rho_vi, c_bi])
+assign(U0, [Ti, rho_ai, rho_vi, c_bi])
 
 # moisture content :
 def m(c_b):
@@ -182,29 +184,29 @@ def D_bT(T, c_b):
 def mu_g(T):
   return 7.85e-6 + 2.62e-8 * T
 
-# gas velocity :
-def v_g(T, P_g):
-  return K * K_g / mu_g(T) * P_g.dx(0)
-
-# diffusion coefficient of air -> water vapor :
-def D_av(T, P_g):
-  return zeta * 1.87 * T**2.072 / P_g * 1e-5
-
 # partial vapor pressure :
 def P_v(T, rho_v):
   return R_v * rho_v * T
 
 # partial air pressure :
-def P_a(T, rho_v, P_g):
-  return P_g - P_v(T, rho_v)
+def P_a(T, rho_a):
+  return R_a * rho_a * T
 
-# concentration of air vapour :
-def rho_a(T, P_g, rho_v):
-  return P_a(T, rho_v, P_g) / (R_a * T)
+# gas pressure :
+def P_g(T, rho_a, rho_v):
+  return P_a(T, rho_a) + P_v(T, rho_v)
+
+# gas velocity :
+def v_g(T, rho_a, rho_v):
+  return K * K_g / mu_g(T) * P_g(T, rho_a, rho_v).dx(0)
+
+# diffusion coefficient of air -> water vapor :
+def D_av(T, rho_a, rho_v):
+  return zeta * 1.87 * T**2.072 / P_g(T, rho_a, rho_v) * 1e-5
 
 # gas mixture concentration :
-def rho_g(T, P_g, rho_v):
-  return rho_v + rho_a(T, P_g, rho_v)
+def rho_g(rho_a, rho_v):
+  return rho_a + rho_v
 
 # saturated vapor pressure (Gronli p119) :
 def P_s(T):
@@ -233,6 +235,7 @@ def cdot(T, rho_v, c_b):
   cdot_n = conditional( le(T, T_boil), \
                         H_c(T, rho_v, c_b)*(c_bl(T, rho_v) - c_b), \
                         H_c(T, rho_v, c_b)*(0 - c_b) )
+  #cdot_n = H_c(T, rho_v, c_b)*(c_bl(T, rho_v) - c_b)
   cdot_n = Constant(0.0)
   return cdot_n
 
@@ -245,17 +248,17 @@ def J_b(T, c_b):
   return - D_b(T, c_b)*c_b.dx(0) - D_bT(T, c_b)*T.dx(0)
 
 # flux of air :
-def J_a(T, P_g, rho_v):
-  J_a_n = + eps_g * rho_a(T, P_g, rho_v) * v_g(T, P_g) \
-          - eps_g * rho_g(T, P_g, rho_v) \
-          * D_av(T, P_g) * (rho_a(T, P_g, rho_v) / rho_g(T, P_g, rho_v)).dx(0)
+def J_a(T, rho_a, rho_v):
+  J_a_n = + eps_g * rho_a * v_g(T, rho_a, rho_v) \
+          - eps_g * rho_g(rho_a, rho_v) \
+          * D_av(T, rho_a, rho_v) * (rho_a / rho_g(rho_a, rho_v)).dx(0)
   return J_a_n
 
 # flux of vapor :
-def J_v(T, P_g, rho_v):
-  J_v_n = + eps_g * rho_v * v_g(T, P_g) \
-          - eps_g * rho_g(T, P_g, rho_v) \
-          * D_av(T, P_g) * (rho_v / rho_g(T, P_g, rho_v)).dx(0)
+def J_v(T, rho_a, rho_v):
+  J_v_n = + eps_g * rho_v * v_g(T, rho_a, rho_v) \
+          - eps_g * rho_g(rho_a, rho_v) \
+          * D_av(T, rho_a, rho_v) * (rho_v / rho_g(rho_a, rho_v)).dx(0)
   return J_v_n
 
 # time derivative :
@@ -269,8 +272,8 @@ J_vdn = - beta * (rho_v_inf - rho_v_mid)
 
 # energy residual :
 conv        = + C_b*J_b(T_mid, c_b_mid) \
-              + C_v*J_v(T_mid, P_g_mid, rho_v_mid) \
-              + C_a*J_a(T_mid, P_g_mid, rho_v_mid) \
+              + C_v*J_v(T_mid, rho_a_mid, rho_v_mid) \
+              + C_a*J_a(T_mid, rho_a_mid, rho_v_mid) \
               - k(c_b_mid).dx(0) + 1e-10
 Pe_T        = h * conv / (2*k(c_b_mid))
 tau_T       = h / (2*conv) * (1/tanh(Pe_T) - 1 /Pe_T)
@@ -283,20 +286,20 @@ cdot_mid  = eta*cdot(T, rho_v, c_b) + (1 - eta)*cdot(T0, rho_v0, c_b0)
 
 def L_T_adv(u):
   Lu = ( + C_b*J_b(u, c_b_mid) \
-         + C_v*J_v(u, P_g_mid, rho_v_mid) \
-         + C_a*J_a(u, P_g_mid, rho_v_mid) - k(c_b_mid).dx(0)) * u.dx(0)
+         + C_v*J_v(u, rho_a_mid, rho_v_mid) \
+         + C_a*J_a(u, rho_a_mid, rho_v_mid) - k(c_b_mid).dx(0)) * u.dx(0)
   return Lu
 
 def L_T(u):  
   Lu = + (k(c_b_mid) * u.dx(0)).dx(0) \
        - DH_s * cdot(u, rho_v_mid, c_b_mid) \
        - ( + C_b*J_b(u, c_b_mid) \
-           + C_v*J_v(u, P_g_mid, rho_v_mid) \
-           + C_a*J_a(u, P_g_mid, rho_v_mid) ) * u.dx(0)
+           + C_v*J_v(u, rho_a_mid, rho_v_mid) \
+           + C_a*J_a(u, rho_a_mid, rho_v_mid) ) * u.dx(0)
   return Lu
 
 dTdt        = dudt(T, T0)
-delta_T     = + ( + eps_g * rho_a(T_mid, P_g_mid, rho_v_mid) * C_a \
+delta_T     = + ( + eps_g * rho_a_mid * C_a \
                   + eps_g * rho_v_mid * C_v \
                   + c_b_mid * C_b \
                   + rho_0 * C_0 ) * dTdt * phi * dx \
@@ -324,42 +327,36 @@ delta_c_b   = + dc_bdt * psi * dx \
 
 # water vapor residual :
 drho_vdt    = dudt(rho_v, rho_v0)
-kappa_rho   = eps_g * rho_g(T, P_g, rho_v) * D_av(T_mid, P_g_mid)
-d_rho       = eps_g * v_g(T_mid, P_g_mid) + 1e-10
-Pe_rho      = h * d_rho / (2*kappa_rho)
-tau_rho     = h / (2*d_rho) * (1/tanh(Pe_rho) - 1 / Pe_rho)
-def L_rho_v(u):     return J_v(T_mid, P_g_mid, u).dx(0)
-def L_rho_adv(u):   return u * d_rho.dx(0) + d_rho * u.dx(0)
+kappa_rho_v = eps_g * rho_g(rho_a, rho_v) * D_av(T_mid, rho_a_mid, rho_v_mid)
+d_rho_v     = eps_g * v_g(T_mid, rho_a_mid, rho_v_mid) + 1e-10
+Pe_rho_v    = h * d_rho_v / (2*kappa_rho_v)
+tau_rho_v   = h / (2*d_rho_v) * (1/tanh(Pe_rho_v) - 1 / Pe_rho_v)
+def L_rho_v(u):     return J_v(T_mid, rho_a_mid, u).dx(0)
+def L_rho_v_adv(u): return u * d_rho_v.dx(0) + d_rho_v * u.dx(0)
 def R_rho_v(u,u0):  return dudt(u, u0) + L_rho_v(u) - cdot(T_mid, u, c_b_mid)
 delta_rho_v = + eps_g * drho_vdt * xi * dx \
-              - J_v(T_mid, P_g_mid, rho_v_mid) * xi.dx(0) * dx \
+              - J_v(T_mid, rho_a_mid, rho_v_mid) * xi.dx(0) * dx \
               + J_vdn * xi * ds(1) \
               + cdot_mid * xi * dx \
-#              + inner(L_rho_adv(xi), tau_rho*R_rho_v(rho_v, rho_v0)) * dx
+#              + inner(L_rho_v_adv(xi), tau_rho_v*R_rho_v(rho_v, rho_v0)) * dx
 
 # gas pressure residual :
-def drho_adt(P, P0):
-  drho_adt_n  = + 1 / (R_a*T_mid) * dudt(P, P0) \
-                - P / (R_a*T_mid**2) * dTdt \
-                 - R_v / R_a * drho_vdt
-  return drho_adt_n
-
-kappa_P     = eps_g * rho_g(T, P_g, rho_v) * D_av(T_mid, P_g_mid)
-d_P         = eps_g * v_g(T_mid, P_g_mid) + 1e-10
-Pe_P        = h * d_P / (2*kappa_P)
-tau_P       = h / (2*d_P) * (1/tanh(Pe_P) - 1 / Pe_P)
-def L_P_adv(u):   return eps_g * ( + u * v_g(T_mid, u).dx(0) \
-                                   + v_g(T_mid, u) * u.dx(0) )
-def L_P(u):       return J_a(T_mid, u, rho_v_mid).dx(0)
-def R_P(u,u0):    return drho_adt(u, u0) + L_P(u)
-delta_P_g   = + eps_g * drho_adt(P_g, P_g0) * kappa * dx \
-              - J_a(T_mid, P_g_mid, rho_v_mid) * kappa.dx(0) * dx \
-              + J_a(T_mid, P_g_mid, rho_v_mid) * kappa * Constant(-1) * ds(1) \
-              + J_a(T_mid, P_g_mid, rho_v_mid) * kappa * Constant(1)  * ds(2) \
-#              + inner(L_P_adv(kappa), tau_rho*R_P(P_g, P_g0)) * dx
+drho_adt    = dudt(rho_a, rho_a0)
+kappa_rho_a = eps_g * rho_g(rho_a_mid, rho_v_mid) \
+                    * D_av(T_mid, rho_a_mid, rho_v_mid)
+d_rho_a     = eps_g * v_g(T_mid, rho_a_mid, rho_v_mid) + 1e-10
+Pe_rho_a    = h * d_rho_a / (2*kappa_rho_a)
+tau_rho_a   = h / (2*d_rho_a) * (1/tanh(Pe_rho_a) - 1 / Pe_rho_a)
+def L_rho_a(u):     return J_a(T_mid, u, rho_v_mid).dx(0)
+def L_rho_a_adv(u): return u * d_rho_a.dx(0) + d_rho_a * u.dx(0)
+def R_rho_a(u,u0):  return dudt(u, u0) + L_rho_v(u)
+delta_rho_a = + eps_g * drho_adt * kappa * dx \
+              - J_a(T_mid, rho_a_mid, rho_v_mid) * kappa.dx(0) * dx \
+              + J_a(T_mid, rho_a_mid, rho_v_mid) * kappa * ds(2) \
+#              + inner(L_rho_a_adv(kappa), tau_rho_a*R_rho_a(rho_a, rho_a0)) * dx
 
 # mixed formulation :
-delta       = delta_T + delta_c_b + delta_rho_v + delta_P_g
+delta       = delta_T + delta_c_b + delta_rho_v + delta_rho_a
 
 # Jacobian :
 J           = derivative(delta, U, dU)
@@ -388,24 +385,24 @@ solver.parameters.update(params)
 
 # set up visualization :
 Tf1     = Function(Q1, name = 'Tf1')
-P_gf1   = Function(Q1, name = 'P_gf1')
+rho_af1 = Function(Q1, name = 'rho_af1')
 rho_vf1 = Function(Q1, name = 'rho_vf1')
 c_bf1   = Function(Q1, name = 'c_bf1')
 
 Tf1.interpolate(Ti)
-P_gf1.interpolate(P_gi)
+rho_af1.interpolate(rho_ai)
 rho_vf1.interpolate(rho_vi)
 c_bf1.interpolate(c_bi)
 
 Tf      = Tf1.vector().array()[::-1]
-P_gf    = P_gf1.vector().array()[::-1]
+rho_af  = rho_af1.vector().array()[::-1]
 rho_vf  = rho_vf1.vector().array()[::-1]
 c_bf    = c_bf1.vector().array()[::-1]
 
 x       = 100 * mesh.coordinates()[:,0]
 Tf      = Tf - T_w
 mf      = 100 * c_bf / rho_0
-P_gf    = P_gf / 1e6
+rho_af  = rho_af * 1e3
 rho_vf  = rho_vf * 1e3
 
 mpl.rcParams['font.family']          = 'serif'
@@ -432,7 +429,7 @@ ax4.set_xlim(0.0, L*100)
 
 Tplt, = ax1.plot(x, Tf,     'k',   lw=2.0, label=r"$T$")
 mplt, = ax2.plot(x, mf,     'k',   lw=2.0, label=r"$m$")
-Pplt, = ax3.plot(x, P_gf,   'k',   lw=2.0, label=r"$P_g$")
+Pplt, = ax3.plot(x, rho_af, 'k',   lw=2.0, label=r"$\rho_a$")
 rplt, = ax4.plot(x, rho_vf, 'k',   lw=2.0, label=r"$\rho_v$")
 
 #leg = ax.legend(loc='upper left', ncol=2, fontsize='medium')
@@ -449,9 +446,9 @@ ax2.set_xlabel(r'$x$ [cm]')
 ax2.set_ylabel(r'$m$ [\%]')
 ax2.grid()
 
-ax3.set_title('Gas pressure')
+ax3.set_title('Air concentration')
 ax3.set_xlabel(r'$x$ [cm]')
-ax3.set_ylabel(r'$P_g$ [MPa]')
+ax3.set_ylabel(r'$\rho_a$ [g/m$^3$]')
 ax3.grid()
 
 ax4.set_title('Vapour concentration')
@@ -481,48 +478,48 @@ def solve_and_plot():
   U0.assign(U)
 
   assT.assign(Tp,         U.sub(0))
-  assP_g.assign(P_gp,     U.sub(1))
+  assrho_a.assign(rho_ap, U.sub(1))
   assrho_v.assign(rho_vp, U.sub(2))
   assc_b.assign(c_bp,     U.sub(3))
 
   print_min_max(Tp,     'T')
-  print_min_max(P_gp,   'P_g')
+  print_min_max(rho_ap, 'rho_a')
   print_min_max(rho_vp, 'rho_v')
   print_min_max(c_bp,   'c_b')
 
   if order != 1:
     Tf1     = Function(Q1, name = 'Tf1')
-    P_gf1   = Function(Q1, name = 'P_gf1')
+    rho_af1 = Function(Q1, name = 'rho_af1')
     rho_vf1 = Function(Q1, name = 'rho_vf1')
     c_bf1   = Function(Q1, name = 'c_bf1')
     Tf1.interpolate(Tp)
-    P_gf1.interpolate(P_gp)
+    rho_af1.interpolate(rho_ap)
     rho_vf1.interpolate(rho_vp)
     c_bf1.interpolate(c_bp)
   else:
     Tf1     = Tp
-    P_gf1   = P_gp
+    rho_af1 = rho_ap
     rho_vf1 = rho_vp
     c_bf1   = c_bp
   
   Tf      = Tf1.vector().array()[::-1]
-  P_gf    = P_gf1.vector().array()[::-1]
+  rho_af  = rho_af1.vector().array()[::-1]
   rho_vf  = rho_vf1.vector().array()[::-1]
   c_bf    = c_bf1.vector().array()[::-1]
   
   Tf      = Tf - T_w
   mf      = 100 * c_bf / rho_0
-  P_gf    = P_gf / 1e6
+  rho_af  = rho_af * 1e3
   rho_vf  = rho_vf * 1e3
 
   ax1.set_ylim(Tf.min(),     Tf.max())
   ax2.set_ylim(mf.min(),     mf.max())
-  ax3.set_ylim(P_gf.min(),   P_gf.max())
+  ax3.set_ylim(rho_af.min(), rho_af.max())
   ax4.set_ylim(rho_vf.min(), rho_vf.max())
   
   Tplt.set_ydata(Tf)
   mplt.set_ydata(mf)
-  Pplt.set_ydata(P_gf)
+  Pplt.set_ydata(rho_af)
   rplt.set_ydata(rho_vf) 
   plt.draw()
   plt.pause(0.00000001)
@@ -594,8 +591,10 @@ while t < tf:
   step_time.append(time() - tic)
 
   # increment time in boundary conditions:
-  T_inf.t     = t
-  rho_v_inf.t = t
+  T_inf.t         = t
+  rho_v_inf.t     = t
+  rho_a_inf.Tp    = Tp(0.0)
+  rho_a_inf.rho_v = rho_vp(0.0)
   
   # for the subsequent iteration, reset the parameters to normal :
   if adaptive:
