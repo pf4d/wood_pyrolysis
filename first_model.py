@@ -1,6 +1,5 @@
 from pylab    import *
 from fenics   import *
-from colored  import fg, attr
 from time     import time
 from helper   import print_text, print_min_max
 import ufl
@@ -38,7 +37,7 @@ rho_v_max = 0.009       # maximum ambient water vapour concentration
 # initial conditions :
 rho_0     = 445.0       # initial timber density
 c_b1      = 53.4        # initial bound water concentration
-rho_v1    = 0.009       # initial water vapour concentration
+rho_v1    = 0.009       # initial water vapor concentration
 P_g1      = 1e5         # initial gas pressure
 T1        = T_w + 20.0  # initial temperature
 
@@ -48,7 +47,7 @@ N         = 200         # spatial discretizations
 order     = 2           # order of function space
 
 # time parameters :
-dt        = 0.1         # time step
+dt        = 0.01         # time step
 t0        = 0.0         # start time
 t         = t0          # current time
 tf        = 60.0 * 60.0 # final time
@@ -178,13 +177,13 @@ def D_b(T, c_b):
 def D_bT(T, c_b):
   return D_b(T, c_b) * c_b * E_b(c_b) / (R*T**2)
 
-# viscosity of gas mixture :
+# viscosity of gas mixture (Gronli pp135) :
 def mu_g(T):
-  return 7.85e-6 + 2.62e-8 * T
+  return 7.85e-6 + 2.18e-8 * T
 
 # gas velocity :
 def v_g(T, P_g):
-  return K * K_g / mu_g(T) * P_g.dx(0)
+  return Constant(0.0)#K * K_g / mu_g(T) * P_g.dx(0)
 
 # diffusion coefficient of air -> water vapor :
 def D_av(T, P_g):
@@ -261,12 +260,6 @@ def J_v(T, P_g, rho_v):
 # time derivative :
 def dudt(u,u0):  return (u - u0) / dt
 
-# boundary conditions :
-h_c   = alpha_c * (T_inf - T_mid)
-h_r   = sigma * eps_m * eps_f * (T_inf**4 - T_mid**4)
-kdTdn = h_c + h_r
-J_vdn = - beta * (rho_v_inf - rho_v_mid)
-
 # energy residual :
 conv        = + C_b*J_b(T_mid, c_b_mid) \
               + C_v*J_v(T_mid, P_g_mid, rho_v_mid) \
@@ -296,6 +289,9 @@ def L_T(u):
   return Lu
 
 dTdt        = dudt(T, T0)
+h_c         = alpha_c * (T_inf - T_mid)
+h_r         = sigma * eps_m * eps_f * (T_inf**4 - T_mid**4)
+kdTdn       = h_c + h_r
 delta_T     = + ( + eps_g * rho_a(T_mid, P_g_mid, rho_v_mid) * C_a \
                   + eps_g * rho_v_mid * C_v \
                   + c_b_mid * C_b \
@@ -331,6 +327,7 @@ tau_rho     = h / (2*d_rho) * (1/tanh(Pe_rho) - 1 / Pe_rho)
 def L_rho_v(u):     return J_v(T_mid, P_g_mid, u).dx(0)
 def L_rho_adv(u):   return u * d_rho.dx(0) + d_rho * u.dx(0)
 def R_rho_v(u,u0):  return dudt(u, u0) + L_rho_v(u) - cdot(T_mid, u, c_b_mid)
+J_vdn       = - beta * (rho_v_inf - rho_v_mid)
 delta_rho_v = + eps_g * drho_vdt * xi * dx \
               - J_v(T_mid, P_g_mid, rho_v_mid) * xi.dx(0) * dx \
               + J_vdn * xi * ds(1) \
@@ -341,7 +338,7 @@ delta_rho_v = + eps_g * drho_vdt * xi * dx \
 def drho_adt(P, P0):
   drho_adt_n  = + 1 / (R_a*T_mid) * dudt(P, P0) \
                 - P / (R_a*T_mid**2) * dTdt \
-                 - R_v / R_a * drho_vdt
+                - R_v / R_a * drho_vdt
   return drho_adt_n
 
 kappa_P     = eps_g * rho_g(T, P_g, rho_v) * D_av(T_mid, P_g_mid)
@@ -354,8 +351,7 @@ def L_P(u):       return J_a(T_mid, u, rho_v_mid).dx(0)
 def R_P(u,u0):    return drho_adt(u, u0) + L_P(u)
 delta_P_g   = + eps_g * drho_adt(P_g, P_g0) * kappa * dx \
               - J_a(T_mid, P_g_mid, rho_v_mid) * kappa.dx(0) * dx \
-              + J_a(T_mid, P_g_mid, rho_v_mid) * kappa * Constant(-1) * ds(1) \
-              + J_a(T_mid, P_g_mid, rho_v_mid) * kappa * Constant(1)  * ds(2) \
+              + J_a(T_mid, P_g_mid, rho_v_mid) * kappa * ds(2) \
 #              + inner(L_P_adv(kappa), tau_rho*R_P(P_g, P_g0)) * dx
 
 # mixed formulation :
@@ -386,82 +382,134 @@ solver = NonlinearVariationalSolver(problem)
 solver.parameters.update(params)
 
 
+#===============================================================================
 # set up visualization :
-Tf1     = Function(Q1, name = 'Tf1')
-P_gf1   = Function(Q1, name = 'P_gf1')
-rho_vf1 = Function(Q1, name = 'rho_vf1')
-c_bf1   = Function(Q1, name = 'c_bf1')
-
-Tf1.interpolate(Ti)
-P_gf1.interpolate(P_gi)
-rho_vf1.interpolate(rho_vi)
-c_bf1.interpolate(c_bi)
-
-Tf      = Tf1.vector().array()[::-1]
-P_gf    = P_gf1.vector().array()[::-1]
-rho_vf  = rho_vf1.vector().array()[::-1]
-c_bf    = c_bf1.vector().array()[::-1]
-
-x       = 100 * mesh.coordinates()[:,0]
-Tf      = Tf - T_w
-mf      = 100 * c_bf / rho_0
-P_gf    = P_gf / 1e6
-rho_vf  = rho_vf * 1e3
 
 mpl.rcParams['font.family']          = 'serif'
 mpl.rcParams['text.usetex']          = True
 mpl.rcParams['text.latex.preamble']  = ['\usepackage{fouriernc}']
+ 
+  
+def calculate_plot_variables(T, P_g, rho_v, c_b):
+  
+  v_gp = project(v_g(T, P_g), Q1)
+
+  if order != 1:
+    T     = interpolate(T, Q1)
+    P_g   = interpolate(P_g, Q1)
+    rho_v = interpolate(rho_v, Q1)
+    c_b   = interpolate(c_b, Q1)
+    v_gp  = interpolate(v_gp, Q1)
+
+  T_v     = T.vector().array()[::-1]
+  P_g_v   = P_g.vector().array()[::-1]
+  rho_v_v = rho_v.vector().array()[::-1]
+  c_b_v   = c_b.vector().array()[::-1]
+  v_g_v   = v_gp.vector().array()[::-1]
+  
+  Tf      = T_v - T_w
+  mf      = 100 * m(c_b_v)
+  P_gf    = P_g_v / 1e6
+  rho_af  = rho_a(T_v, P_g_v, rho_v_v) * 1e3
+  rho_vf  = rho_v_v * 1e3
+  v_gf    = v_g_v
+
+  return Tf, mf, rho_af, rho_vf, P_gf, v_gf
+
+
+x = 100 * mesh.coordinates()[:,0]
 
 plt.ion()
 
-fig = figure(figsize=(10,10))
-ax1 = fig.add_subplot(221)
-ax2 = fig.add_subplot(222)
-ax3 = fig.add_subplot(223)
-ax4 = fig.add_subplot(224)
+fig = figure(figsize=(12,5))
+ax1 = fig.add_subplot(231)
+ax2 = fig.add_subplot(232)
+ax3 = fig.add_subplot(233)
+ax4 = fig.add_subplot(234)
+ax5 = fig.add_subplot(235)
+ax6 = fig.add_subplot(236)
 
 ax1.set_xlim(0.0, L*100)
 ax2.set_xlim(0.0, L*100)
 ax3.set_xlim(0.0, L*100)
 ax4.set_xlim(0.0, L*100)
+ax6.set_xlim(0.0, L*100)
 
 #ax1.set_ylim(0.0, 40.0)
 #ax2.set_ylim(0.0, 14.0)
 #ax3.set_ylim(0.1, 0.18)
 #ax4.set_ylim(0.0, 700.0)
 
-Tplt, = ax1.plot(x, Tf,     'k',   lw=2.0, label=r"$T$")
-mplt, = ax2.plot(x, mf,     'k',   lw=2.0, label=r"$m$")
-Pplt, = ax3.plot(x, P_gf,   'k',   lw=2.0, label=r"$P_g$")
-rplt, = ax4.plot(x, rho_vf, 'k',   lw=2.0, label=r"$\rho_v$")
+out = calculate_plot_variables(Tp, P_gp, rho_vp, c_bp)
+Tf, mf, rho_af, rho_vf, P_gf, v_gf = out
+
+Tplt,  = ax1.plot(x, Tf,     'k',   lw=2.0, label=r"$T$")
+mplt,  = ax2.plot(x, mf,     'k',   lw=2.0, label=r"$m$")
+Pplt,  = ax3.plot(x, P_gf,   'k',   lw=2.0, label=r"$P_g$")
+raplt, = ax4.plot(x, rho_af, 'k',   lw=2.0, label=r"$\rho_a$")
+rvplt, = ax5.plot(x, rho_vf, 'k',   lw=2.0, label=r"$\rho_v$")
+vplt,  = ax6.plot(x, v_gf,   'k',   lw=2.0, label=r"$v_g$")
 
 #leg = ax.legend(loc='upper left', ncol=2, fontsize='medium')
 #leg.get_frame().set_alpha(0.0)
 
 
-ax1.set_title('Temperature')
+ax1.set_title(r'Temperature $T$ [$^{\circ}$C]')
 ax1.set_xlabel(r'$x$ [cm]')
-ax1.set_ylabel(r'$T$ [$^{\circ}$ C]')
+#ax1.set_ylabel(r'$T$ [$^{\circ}$C]')
 ax1.grid()
 
-ax2.set_title('Moisture content')
+ax2.set_title(r'Moisture content $m$ [\%]')
 ax2.set_xlabel(r'$x$ [cm]')
-ax2.set_ylabel(r'$m$ [\%]')
+#ax2.set_ylabel(r'$m$ [\%]')
 ax2.grid()
 
-ax3.set_title('Gas pressure')
+ax3.set_title(r'Gas pressure $P_g$ [MPa]')
 ax3.set_xlabel(r'$x$ [cm]')
-ax3.set_ylabel(r'$P_g$ [MPa]')
+#ax3.set_ylabel(r'$P_g$ [MPa]')
 ax3.grid()
 
-ax4.set_title('Vapour concentration')
+ax4.set_title(r'Air concentration $\rho_a$ [g/m$^3$]')
 ax4.set_xlabel(r'$x$ [cm]')
-ax4.set_ylabel(r'$\rho_v$ [g/m$^3$]')
+#ax4.set_ylabel(r'$\rho_a$ [g/m$^3$]')
 ax4.grid()
+
+ax5.set_title(r'Vapor concentration $\rho_v$ [g/m$^3$]')
+ax5.set_xlabel(r'$x$ [cm]')
+#ax5.set_ylabel(r'$\rho_v$ [g/m$^3$]')
+ax5.grid()
+
+ax6.set_title(r'Gas velocity $v_g$ [m/s]')
+ax6.set_xlabel(r'$x$ [cm]')
+#ax6.set_ylabel(r'$v_g$ [m/s]')
+ax6.grid()
 
 plt.tight_layout()
 plt.show()
-    
+
+
+def update_plot(T, P_g, rho_v, c_b):
+ 
+  out = calculate_plot_variables(T, P_g, rho_v, c_b)
+  Tf, mf, rho_af, rho_vf, P_gf, v_gf = out
+  
+  ax1.set_ylim(Tf.min(),     Tf.max())
+  ax2.set_ylim(mf.min(),     mf.max())
+  ax3.set_ylim(P_gf.min(),   P_gf.max())
+  ax4.set_ylim(rho_af.min(), rho_af.max())
+  ax5.set_ylim(rho_vf.min(), rho_vf.max())
+  ax6.set_ylim(v_gf.min(),   v_gf.max())
+  
+  Tplt.set_ydata(Tf)
+  mplt.set_ydata(mf)
+  Pplt.set_ydata(P_gf)
+  raplt.set_ydata(rho_af)
+  rvplt.set_ydata(rho_vf)
+  vplt.set_ydata(v_gf)
+
+  plt.draw()
+  plt.pause(0.00000001)
+
 
 def solve_and_plot():
 
@@ -489,54 +537,20 @@ def solve_and_plot():
   print_min_max(P_gp,   'P_g')
   print_min_max(rho_vp, 'rho_v')
   print_min_max(c_bp,   'c_b')
-
-  if order != 1:
-    Tf1     = Function(Q1, name = 'Tf1')
-    P_gf1   = Function(Q1, name = 'P_gf1')
-    rho_vf1 = Function(Q1, name = 'rho_vf1')
-    c_bf1   = Function(Q1, name = 'c_bf1')
-    Tf1.interpolate(Tp)
-    P_gf1.interpolate(P_gp)
-    rho_vf1.interpolate(rho_vp)
-    c_bf1.interpolate(c_bp)
-  else:
-    Tf1     = Tp
-    P_gf1   = P_gp
-    rho_vf1 = rho_vp
-    c_bf1   = c_bp
   
-  Tf      = Tf1.vector().array()[::-1]
-  P_gf    = P_gf1.vector().array()[::-1]
-  rho_vf  = rho_vf1.vector().array()[::-1]
-  c_bf    = c_bf1.vector().array()[::-1]
-  
-  Tf      = Tf - T_w
-  mf      = 100 * c_bf / rho_0
-  P_gf    = P_gf / 1e6
-  rho_vf  = rho_vf * 1e3
-
-  ax1.set_ylim(Tf.min(),     Tf.max())
-  ax2.set_ylim(mf.min(),     mf.max())
-  ax3.set_ylim(P_gf.min(),   P_gf.max())
-  ax4.set_ylim(rho_vf.min(), rho_vf.max())
-  
-  Tplt.set_ydata(Tf)
-  mplt.set_ydata(mf)
-  Pplt.set_ydata(P_gf)
-  rplt.set_ydata(rho_vf) 
-  plt.draw()
-  plt.pause(0.00000001)
+  update_plot(Tp, P_gp, rho_vp, c_bp)
 
   return out
 
 
-
 stars = "*****************************************************************"
-t0              = time()
 step_time       = []
 initial_dt      = dt
 initial_alpha   = params['newton_solver']['relaxation_parameter']
 adaptive        = True
+
+# start the timer :
+start_time = time()
 
 # Loop over all times
 while t < tf:
@@ -608,7 +622,7 @@ while t < tf:
   
 
 # calculate total time to compute
-sec = time() - t0
+sec = time() - start_time
 mnn = sec / 60.0
 hor = mnn / 60.0
 sec = sec % 60
