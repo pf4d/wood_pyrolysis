@@ -352,6 +352,7 @@ def R_P(u,u0):    return drho_adt(u, u0) + L_P(u)
 delta_P_g   = + eps_g * drho_adt(P_g, P_g0) * kappa * dx \
               - J_a(T_mid, P_g_mid, rho_v_mid) * kappa.dx(0) * dx \
               + J_a(T_mid, P_g_mid, rho_v_mid) * kappa * ds(2) \
+              - J_a(T_mid, P_g_mid, rho_v_mid) * kappa * ds(1) \
 #              + inner(L_P_adv(kappa), tau_rho*R_P(P_g, P_g0)) * dx
 
 # mixed formulation :

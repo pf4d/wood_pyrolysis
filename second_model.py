@@ -45,14 +45,15 @@ rho_a1    = P_g1 / (R_a * T1) - R_v * rho_v1 / R_a  # initial air concentration
 # mesh parameters :
 L         = 0.1         # length
 N         = 200         # spatial discretizations
-order     = 2           # order of function space
+order     = 1           # order of function space
 
 # time parameters :
-dt        = 0.01         # time step
+dt        = 0.1         # time step
 t0        = 0.0         # start time
 t         = t0          # current time
+t1        = 30.0
 tf        = 60.0*60.0   # final time
-eta       = 1           # time-step parameter
+eta       = 1.0         # time-step parameter
 
 # sorption parameters :
 b_10d     = 16.3
@@ -99,7 +100,10 @@ class AmbientTemperature(Expression):
   def __init__(self, t, element=None):
     self.t = t
   def eval(self, value, x):
-    value[0] = T1 + 345*log10(8*self.t/60.0 + 1)
+    if self.t < t1:
+      value[0] = T1
+    else:
+      value[0] = T1 + 345*log10(8*self.t/60.0 + 1)
 T_inf = AmbientTemperature(t0, element=Qe)
 
 # vapour concentration in ambient air :
@@ -107,8 +111,11 @@ class AmbientVapour(Expression):
   def __init__(self, t, element=None):
     self.t = t
   def eval(self, value, x):
-    if self.t < 60:
-      value[0] = rho_v_max - rho_v_max / 60.0 * self.t
+    t2 = t1 + 60
+    if self.t < t1:
+      value[0] = rho_v_max
+    if self.t < t2:
+      value[0] = rho_v_max - rho_v_max / t2 * self.t
     else:
       value[0] = 0.0
 rho_v_inf = AmbientVapour(t0, element=Qe)
@@ -182,7 +189,7 @@ def D_bT(T, c_b):
 
 # viscosity of gas mixture (Gronli pp135) :
 def mu_g(T):
-  return 7.85e-6 + 2.18e-8 * T
+  return 7.85e-6# + 2.18e-8 * T
 
 # partial vapor pressure :
 def P_v(T, rho_v):
@@ -198,7 +205,7 @@ def P_g(T, rho_a, rho_v):
 
 # gas velocity :
 def v_g(T, rho_a, rho_v):
-  return Constant(0.0)#K * K_g / mu_g(T) * P_g(T, rho_a, rho_v).dx(0)
+  return - K * K_g / mu_g(T) * P_g(T, rho_a, rho_v).dx(0)
 
 # diffusion coefficient of air -> water vapor :
 def D_av(T, rho_a, rho_v):
@@ -228,6 +235,7 @@ def H_c(T, rho_v, c_b):
   H_c_n = conditional(le(c_b, c_bl(T, rho_v)), \
                       C_1*exp(-C_2*(    c_b/c_bl(T, rho_v))**C_3) + C_4, \
                       C_1*exp(-C_2*(2 - c_b/c_bl(T, rho_v))**C_3) + C_4 )
+  H_c_n = C_1*exp(-C_2*(2 - c_b/c_bl(T, rho_v))**C_3) + C_4
   return H_c_n
 
 # sorption rate :
@@ -235,8 +243,8 @@ def cdot(T, rho_v, c_b):
   cdot_n = conditional( le(T, T_boil), \
                         H_c(T, rho_v, c_b)*(c_bl(T, rho_v) - c_b), \
                         H_c(T, rho_v, c_b)*(0 - c_b) )
-  #cdot_n = H_c(T, rho_v, c_b)*(c_bl(T, rho_v) - c_b)
-  cdot_n = Constant(0.0)
+  cdot_n = H_c(T, rho_v, c_b)*(c_bl(T, rho_v) - c_b)
+  #cdot_n = Constant(0.0)
   return cdot_n
 
 # thermal conductivity :
@@ -263,6 +271,27 @@ def J_v(T, rho_a, rho_v):
 
 # time derivative :
 def dudt(u,u0):  return (u - u0) / dt
+      
+# intrinsic time parameter :
+def tau(u, k):
+
+  # the Peclet number : 
+  Unorm  = sqrt(dot(u, u) + DOLFIN_EPS)
+  PE     = Unorm * h / (2*k)
+
+  # for linear elements :
+  if order == 1:
+    xi     = 1/tanh(PE) - 1/PE
+
+  # for quadradic elements :
+  if order == 2:
+    xi_1  = 0.5*(1/tanh(PE) - 2/PE)
+    xi    =     ((3 + 3*PE*xi_1)*tanh(PE) - (3*PE + PE**2*xi_1)) \
+             /  ((2 - 3*xi_1*tanh(PE))*PE**2)
+  
+  # intrinsic time parameter :
+  tau_n = h*xi / (2 * Unorm)
+  return tau_n
 
 # energy residual :
 conv        = + C_b*J_b(T_mid, c_b_mid) \
@@ -312,7 +341,6 @@ kappa_c     = D_b(T_mid, c_b_mid) + 1e-10
 d_c         = D_b(T_mid, c_b_mid).dx(0) + 1e-10
 s_c         = - D_b(T_mid, c_b0) * E_b(c_b0) \
               * (T_mid.dx(0).dx(0)) / (R*T_mid**2)
-Pe_c        = h * d_c / (2*kappa_c)
 tau_c       = 1 / (4*kappa_c/h**2 + 2*d_c/h + s_c)
 def L_c(u):      return J_b(T_mid, u).dx(0)
 def L_c_adv(u):  return u * d_c.dx(0) + d_c * u.dx(0)
@@ -325,9 +353,8 @@ delta_c_b   = + dc_bdt * psi * dx \
 # water vapor residual :
 drho_vdt    = dudt(rho_v, rho_v0)
 kappa_rho_v = eps_g * rho_g(rho_a, rho_v) * D_av(T_mid, rho_a_mid, rho_v_mid)
-d_rho_v     = eps_g * v_g(T_mid, rho_a_mid, rho_v_mid) + 1e-10
-Pe_rho_v    = h * d_rho_v / (2*kappa_rho_v)
-tau_rho_v   = h / (2*d_rho_v) * (1/tanh(Pe_rho_v) - 1 / Pe_rho_v)
+d_rho_v     = eps_g * v_g(T_mid, rho_a_mid, rho_v_mid) + 1e-5
+tau_rho_v   = tau(d_rho_v, kappa_rho_v)
 def L_rho_v(u):     return J_v(T_mid, rho_a_mid, u).dx(0)
 def L_rho_v_adv(u): return u * d_rho_v.dx(0) + d_rho_v * u.dx(0)
 def R_rho_v(u,u0):  return dudt(u, u0) + L_rho_v(u) - cdot(T_mid, u, c_b_mid)
@@ -336,22 +363,21 @@ delta_rho_v = + eps_g * drho_vdt * xi * dx \
               - J_v(T_mid, rho_a_mid, rho_v_mid) * xi.dx(0) * dx \
               + J_vdn * xi * ds(1) \
               + cdot_mid * xi * dx \
-#              + inner(L_rho_v_adv(xi), tau_rho_v*R_rho_v(rho_v, rho_v0)) * dx
+              + inner(L_rho_v_adv(xi), tau_rho_v*R_rho_v(rho_v, rho_v0)) * dx
 
 # gas pressure residual :
 drho_adt    = dudt(rho_a, rho_a0)
 kappa_rho_a = eps_g * rho_g(rho_a_mid, rho_v_mid) \
                     * D_av(T_mid, rho_a_mid, rho_v_mid)
-d_rho_a     = eps_g * v_g(T_mid, rho_a_mid, rho_v_mid) + 1e-10
-Pe_rho_a    = h * d_rho_a / (2*kappa_rho_a)
-tau_rho_a   = h / (2*d_rho_a) * (1/tanh(Pe_rho_a) - 1 / Pe_rho_a)
+d_rho_a     = eps_g * v_g(T_mid, rho_a_mid, rho_v_mid) + 1e-5
+tau_rho_a   = tau(d_rho_a, kappa_rho_a)
 def L_rho_a(u):     return J_a(T_mid, u, rho_v_mid).dx(0)
 def L_rho_a_adv(u): return u * d_rho_a.dx(0) + d_rho_a * u.dx(0)
-def R_rho_a(u,u0):  return dudt(u, u0) + L_rho_v(u)
+def R_rho_a(u,u0):  return dudt(u, u0) + L_rho_a(u)
 delta_rho_a = + eps_g * drho_adt * kappa * dx \
               - J_a(T_mid, rho_a_mid, rho_v_mid) * kappa.dx(0) * dx \
               + J_a(T_mid, rho_a_mid, rho_v_mid) * kappa * ds(2) \
-#              + inner(L_rho_a_adv(kappa), tau_rho_a*R_rho_a(rho_a, rho_a0)) * dx
+              + inner(L_rho_a_adv(kappa), tau_rho_a*R_rho_a(rho_a, rho_a0)) * dx
 
 # mixed formulation :
 delta       = delta_T + delta_c_b + delta_rho_v + delta_rho_a
@@ -363,8 +389,8 @@ params      = {'newton_solver' :
                 {
                   'linear_solver'           : 'mumps',
                   #'preconditioner'          : 'hypre_amg',
-                  'absolute_tolerance'      : 1e-8,
-                  'relative_tolerance'      : 1e-5,
+                  'absolute_tolerance'      : 1e-14,
+                  'relative_tolerance'      : 1e-3,
                   'relaxation_parameter'    : 1.0,
                   'maximum_iterations'      : 10,
                   'error_on_nonconvergence' : False
@@ -374,6 +400,7 @@ ffc_options = {"optimize"               : True,
                "eliminate_zeros"        : True,
                "precompute_basis_const" : True,
                "precompute_ip_const"    : True}
+#ffc_options = {}
 
 problem = NonlinearVariationalProblem(delta, U, J=J, bcs=bcs,
             form_compiler_parameters=ffc_options)
@@ -392,6 +419,7 @@ mpl.rcParams['text.latex.preamble']  = ['\usepackage{fouriernc}']
 def calculate_plot_variables(T, rho_a, rho_v, c_b):
   
   v_gp = project(v_g(T, rho_a, rho_v), Q1)
+  print_min_max(v_gp, 'v_gp')
 
   if order != 1:
     T     = interpolate(T, Q1)
@@ -411,7 +439,7 @@ def calculate_plot_variables(T, rho_a, rho_v, c_b):
   rho_af  = rho_a_v * 1e3
   rho_vf  = rho_v_v * 1e3
   P_gf    = P_g(T_v, rho_a_v, rho_v_v) / 1e6
-  v_gf    = v_g_v
+  v_gf    = v_g_v * 1e3
 
   return Tf, mf, rho_af, rho_vf, P_gf, v_gf
 
@@ -477,7 +505,7 @@ ax5.set_xlabel(r'$x$ [cm]')
 #ax5.set_ylabel(r'$\rho_v$ [g/m$^3$]')
 ax5.grid()
 
-ax6.set_title(r'Gas velocity $v_g$ [m/s]')
+ax6.set_title(r'Gas velocity $v_g$ [mm/s]')
 ax6.set_xlabel(r'$x$ [cm]')
 #ax6.set_ylabel(r'$v_g$ [m/s]')
 ax6.grid()
