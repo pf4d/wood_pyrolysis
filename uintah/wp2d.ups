@@ -29,7 +29,7 @@
   <Grid>
     <BoundaryConditions>
       <Face side="x-">
-        <BCType id="0" label="Pressure" var="Neumann">
+        <BCType id="all" label="Pressure" var="Neumann">
           <value>   0.0        </value>
         </BCType>
 <!--         <BCType id="all" label="Velocity" var="Neumann"> -->
@@ -47,7 +47,7 @@
         </BCType>
       </Face>
       <Face side="x+">
-        <BCType id="0" label="Pressure" var="Neumann">
+        <BCType id="all" label="Pressure" var="Neumann">
           <value>   0.0        </value>
         </BCType>
 <!--         <BCType id="all" label="Velocity" var="Neumann"> -->
@@ -75,7 +75,7 @@
       </Face>
 
       <Face side="z-">
-        <BCType id="0" label="Pressure" var="Neumann">
+        <BCType id="all" label="Pressure" var="Neumann">
           <value>   0.0        </value>
         </BCType>
 <!--         <BCType id="all" label="Velocity" var="Neumann"> -->
@@ -93,7 +93,7 @@
         </BCType>
       </Face>
       <Face side="z+">
-        <BCType id="0" label="Pressure" var="Neumann">
+        <BCType id="all" label="Pressure" var="Neumann">
           <value>   0.0        </value>
         </BCType>
 <!--         <BCType id="all" label="Velocity" var="Neumann"> -->
