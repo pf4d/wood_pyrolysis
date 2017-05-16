@@ -101,7 +101,7 @@
           <value>   [0.,0.,0.] </value>
         </BCType>
         <BCType id="all" label="Temperature" var="Neumann">
-          <value>   118.34319  </value>
+          <value>   769.230769 </value>
 <!--         <BCType id="all" label="Temperature" var="Dirichlet"> -->
 <!--           <value>   500.0      </value> -->
         </BCType>
