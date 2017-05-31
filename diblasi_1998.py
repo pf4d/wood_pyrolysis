@@ -1,4 +1,5 @@
 from fenics import *
+from time   import time
 
 # constants :
 R          = 8.3144      # universal gas constant
@@ -7,18 +8,18 @@ g_a        = 9.80665     # gravitational acceleration
 
 # pre-exponential factor for wood (W), tar (r) and char + gas (av) :
 A_W        = 2.8e19
-A_av       = 1.3e10
+A_C        = 1.3e10
 A_r        = 3.28e14
 
 # activation energy for wood (W), tar (r) and char + gas (av) :
 E_W        = 242.4e3
-E_av       = 150.5e3
+E_C        = 150.5e3
 E_r        = 196.5e3
 
 nu_G       = 0.65
 nu_C       = 0.35
 delta_h_W  = 0.0
-delta_h_av = -418.0e3
+delta_h_C  = -418.0e3
 delta_h_r  = -418.0e3
 c_W        = 2.3e3
 c_A        = 2.3e3
@@ -67,20 +68,26 @@ rho_A_0    = 0.0
 rho_C_0    = 0.0
 V_S_0      = 1.0
 p_0        = 1e5
-W_g        = 1.0  # FIXME:need an expression for the molecular weight of gas
+W_g        = 2.897e-2  # FIXME: need molecular weight of gas
 rho_g_0    = p_0 * W_g / (R * T_0)
+
+# time parameters :
+dt         = 0.1         # time step
+t0         = 0.0         # start time
+t          = t0          # current time
+tf         = 60.0*60.0   # final time
 
 # boundary conditions :
 T_inf      = 900.0                      # ambient temperature
 p_inf      = p_0                        # ambient gas pressure
 
 # the gas density boundary Dirichlet boundary condition :
-rho_g_inf = Expression('p_inf * W_g / (R * Tp)', \
-                       p_inf=p_inf, W_g=W_g, R=R, Tp=T_0, degree=2)
+rho_g_inf  = Expression('p_inf * W_g / (R * Tp)', \
+                        p_inf=p_inf, W_g=W_g, R=R, Tp=T_0, degree=2)
 
 # mesh varaiables :
-tau       = 1.0#0.5e-2                       # width of domain
-dn        = 32                           # number of elements
+tau        = 1.0e-2                     # width of domain
+dn         = 32                         # number of elements
 
 
 # volume of solid :
@@ -91,17 +98,29 @@ def V_S(rho_W, rho_C, rho_A):
 def K(T, A, E):
   return A * exp( - E / RT)
 
-# virgin wood reaction rate :
+# virgin wood reaction rate factor :
 def K_W(T):
   return K(T, A_W, E_W)
 
-# char and gas reaction rate :
-def K_av(T):
-  return K(T, A_av, E_av)
+# char and gas reaction rate factor :
+def K_C(T):
+  return K(T, A_C, E_C)
 
-# tar reaction rate :
+# tar reaction rate factor :
 def K_r(T):
   return K(T, A_r, E_r)
+
+# virgin wood reaction rate :
+def r_W(rho_W, T):
+  return K_W(T) * rho_W
+
+# char and gas reaction rate :
+def r_C(rho_A, T):
+  return K_C(T) * rho_A
+
+# tar reaction rate :
+def r_r(rho_A, T):
+  return K_r(T) * rho_A
 
 # porosity :
 def epsilon(rho_W, rho_C, rho_A, V):
@@ -152,7 +171,7 @@ def j_T(rho_W, rho_A, rho_g, T, V):
 # enthalpy variation due to chemical reactions :
 def q_r(rho_W, rho_A, T):
   q_r_v = + K_W(T)*rho_W*(delta_h_W + (T - T_0)*(c_W - c_A)) \
-          + K_av(T)*rho_A*(delta_h_av + (T - T_0)*(c_A - nu_C*c_C - nu_g*c_G)) \
+          + K_C(T)*rho_A*(delta_h_C + (T - T_0)*(c_A - nu_C*c_C - nu_g*c_G)) \
           + K_r(T)*rho_A*(delta_h_r + (T - T_0)*(c_A - c_r))
   return q_r_v
 
@@ -161,57 +180,111 @@ def k_grad_T(T):
   k_grad_T_v = - omega * sigma * (T**4 - T_inf**4) - h_c * (T - T_inf)
   return as_vector([k_grad_T_v, k_grad_T_v])
 
-# create a genreic box mesh, we'll fit it to geometry below :
+# time derivative :
+def dudt(u,u1):  return (u - u1) / dt
+
+# create a mesh :
 p1    = Point(0.0, 0.0)                  # origin
 p2    = Point(tau, tau)                  # x, y corner 
 mesh  = RectangleMesh(p1, p2, dn, dn)    # a box to fill the void 
 
-# Define finite elements spaces and build mixed space
+# define finite elements spaces and build mixed space :
 BDM   = FiniteElement("BDM", mesh.ufl_cell(), 1)
 DG    = FiniteElement("DG",  mesh.ufl_cell(), 0)
 CG    = FiniteElement("CG",  mesh.ufl_cell(), 1)
-We    = MixedElement([BDM, DG, CG])
-W     = FunctionSpace(mesh, BDM * DG)
+We    = MixedElement([BDM, DG, CG, CG, CG, CG])
+W     = FunctionSpace(mesh, We)
 
-# Define trial and test functions
-j,   u    = TrialFunctions(W)
-phi, psi  = TestFunctions(W)
+# outward-facing normal vector :
+n     = FacetNormal(mesh)
 
-f = Expression("10*exp(-(pow(x[0] - 0.5, 2) + pow(x[1] - 0.5, 2)) / 0.02)",
-               degree=2)
+# define trial and test functions :
+dW        = TrialFunction(W)
+Phi       = TestFunction(W)
+w         = Function(W)
+w1        = Function(W)
 
-# Define variational form
-delta_j = dot(j, phi) * dx - div(phi) * u * dx
-delta_u = div(j) * psi * dx + f*psi*dx
-delta   = delta_j + delta_u
-L       = rhs(delta)
-a       = lhs(delta)
+# get the individual functions :
+phi,   psi,    xi,     chi,    zeta,   beta  = Phi.split()
+j,     rho_g,  rho_W,  rho_r,  rho_C,  T     = w.split()
+j1,    rho_g1, rho_W1, rho_r1, rho_C1, T     = w1.split()
 
-# Define function G such that G \cdot n = g
-class BoundarySource(Expression):
-  def __init__(self, mesh, **kwargs):
-    self.mesh = mesh
-  def eval_cell(self, values, x, ufc_cell):
-    cell      = Cell(self.mesh, ufc_cell.index)
-    n         = cell.normal(ufc_cell.local_facet)
-    g         = sin(5*x[0])
-    values[0] = g*n[0]
-    values[1] = g*n[1]
-  def value_shape(self):
-    return (2,)
+# gas mass flux residual :
+j_p           = - rho_g * B(rho_W, rho_A) / mu * p(rho_g, T)
+j_p_inf       = - rho_g_inf * B(rho_W, rho_A) / mu * p(rho_g_inf, T_inf)
+j_g           = - rho_g * B(rho_W, rho_A) / mu * rho_g*g
+delta_j_rho_g = + dot(j, phi) * dx \
+                + div(phi) * j_p * dx \
+                - j_p_inf * dot(phi, n) * ds \
+                - dot(j_g, phi) * dx
 
-G = BoundarySource(mesh, degree=2)
+# gas mass balance residual :
+ep1           = epsilon(rho_W1, rho_C1, rho_A1, V)
+ep            = epsilon(rho_W,  rho_C,  rho_A,  V)
+delta_rho_g   = + dudt(ep*rho_g, ep1*rho_g1) * psi * dx \
+                + div(j) * psi * dx \
+                - (nu_G*r_C(rho_A, T) + r_t(rho_A, T))*psi*dx
 
-# Define essential boundary
-def boundary(x):
-  return x[1] < DOLFIN_EPS or x[1] > 1.0 - DOLFIN_EPS
+# virgin solid wood mass balance :
+delta_rho_W   = + dudt(rho_W, rho_W1) * xi * dx \
+                + r_W(rho_W, T) * xi * dx
 
-bc = DirichletBC(W.sub(0), G, boundary)
+# active intermediate solid wood (tar) mass balance :
+delta_rho_r   = + dudt(rho_A, rho_A1) * chi * dx \
+                + (r_C(rho_A, T) + r_t(rho_A, T) - r_W(rho_W, T)) * chi * dx
 
-# Compute solution
-w   = Function(W)
-solve(a == L, w, bc)
-j,u = w.split()
+# solid char mass balance :
+delta_rho_C   = + dudt(rho_C, rho_C1) * zeta * dx \
+                - nu_C * r_C(rho_A, T) * zeta * dx
+
+# enthalpy balance :
+T_factor      = (rho_C*c_C + rho_W*c_W + rho_A*c_A + ep*rho_g*c_g)
+delta_T       = + T_factor * dudt(T, T1) * beta * dx \
+                + c_g*dot(j, grad(T)) * beta * dx \
+                + k(rho_W, rho_C, rho_A, T, V) * dot(grad(T), grad(beta)) * dx \
+                - dot(k_grad_T(T), n) * beta * dx \
+                - q_r(rho_W, rho_A, T)
+
+# total residual :
+delta         = + delta_j_rho_g + delta_rho_g + delta_rho_W \
+                + delta_rho_r + delta_rho_C + delta_T
+
+# Jacobian :
+J             = derivative(delta, W, dW)
+
+# define essential boundary :
+def boundary(x, on_boundary
+  return on_boundary 
+
+bc = DirichletBC(W.sub(0), G, boundary) #FIXME
+
+# start the timer :
+start_time = time()
+
+# loop over all times :
+while t < tf:
+
+  # start the timer :
+  tic = time()
+
+  # Compute solution
+  solve(delta == 0, w, J=J, bcs=bc)
+  j,u = w.split()
+  
+  # increment time step :
+  s = '>>> Time: %g s, CPU time for last dt: %.3f s <<<'
+  print_text(s % (t, time()-tic), 'red', 1)
+
+  t += dt
+
+# calculate total time to compute
+sec = time() - start_time
+mnn = sec / 60.0
+hor = mnn / 60.0
+sec = sec % 60
+mnn = mnn % 60
+text = "total time to perform transient run: %02d:%02d:%02d" % (hor,mnn,sec)
+print_text(text, 'red', 1)
 
 # Plot sigma and u
 plot(j)
