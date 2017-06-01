@@ -40,34 +40,34 @@ d          = as_vector([d_x,   d_y  ])
 
 # permeability :
 B_W_x      = 1e-14
-B_W_y      = 1e-14
-#B_W_y      = 1e-11
+#B_W_y      = 1e-14
+B_W_y      = 1e-11
 B_W        = as_vector([B_W_x, B_W_y])
 
 B_A_x      = 1e-14
-B_A_y      = 1e-14
-#B_A_y      = 1e-11
+#B_A_y      = 1e-14
+B_A_y      = 1e-11
 B_A        = as_vector([B_A_x, B_A_y])
 
 B_C_x      = 5e-12
-B_C_y      = 5e-12
-#B_C_y      = 5e-11
+#B_C_y      = 5e-12
+B_C_y      = 5e-11
 B_C        = as_vector([B_C_x, B_C_y])
 
 # thermal conductivity :
 k_W_x      = 10.5e-2
-k_W_y      = 10.5e-2
-#k_W_y      = 25.5e-2
+#k_W_y      = 10.5e-2
+k_W_y      = 25.5e-2
 k_W        = as_vector([k_W_x, k_W_y])
 
 k_A_x      = 10.5e-2
-k_A_y      = 10.5e-2
-#k_A_y      = 25.5e-2
+#k_A_y      = 10.5e-2
+k_A_y      = 25.5e-2
 k_A        = as_vector([k_A_x, k_A_y])
 
 k_C_x      = 7.1e-2
-k_C_y      = 7.1e-2
-#k_C_y      = 10.46e-2
+#k_C_y      = 7.1e-2
+k_C_y      = 10.46e-2
 k_C        = as_vector([k_C_x, k_C_y])
 
 k_g_x      = 25.77e-3
@@ -91,7 +91,7 @@ rho_g_0    = p_0 * W_g / (R * T_0)
 dt         = 0.01                       # time step
 t0         = 0.0                        # start time
 t          = t0                         # current time
-tf         = 5                          # final time
+tf         = 20                         # final time
 
 # boundary conditions :
 T_inf      = 900.0                      # ambient temperature
@@ -217,7 +217,7 @@ W      = FunctionSpace(mesh, We)
 def boundary(x, on_boundary):
   return on_boundary
 
-bc = DirichletBC(W.sub(5), 400, boundary)
+bc = DirichletBC(W.sub(5), 600, boundary)
 
 # outward-facing normal vector :
 n      = FacetNormal(mesh)
@@ -333,8 +333,8 @@ delta_T       = + T_factor * dudt(T, T1) * beta * dx \
                 + k(rho_W, rho_C, rho_A, T, V)[0] * T.dx(0) * beta.dx(0) * dx \
                 + k(rho_W, rho_C, rho_A, T, V)[1] * T.dx(1) * beta.dx(1) * dx \
                 - q_r(rho_W, rho_A, T) * beta * dx \
-                - kdTdn(T) * beta * ds \
-                + inner(L_T_adv(beta), tau_T*L_T(T)) * dx
+#                + inner(L_T_adv(beta), tau_T*L_T(T)) * dx \
+#                - kdTdn(T) * beta * ds \
 
 # total residual :
 delta         = delta_j_rho_g + delta_rho_g + delta_rho_W \
@@ -346,12 +346,13 @@ J             = derivative(delta, w, dw)
 params      = {'newton_solver' :
                 {
                   'linear_solver'           : 'mumps',
-                  #'preconditioner'          : 'hypre_amg',
+                  #'linear_solver'           : 'tfqmr',
+                  #'preconditioner'          : 'jacobi',
                   'absolute_tolerance'      : 1e-14,
-                  'relative_tolerance'      : 1e-6,
+                  'relative_tolerance'      : 1e-8,
                   'relaxation_parameter'    : 1.0,
-                  'maximum_iterations'      : 10,
-                  'error_on_nonconvergence' : True
+                  'maximum_iterations'      : 16,
+                  'error_on_nonconvergence' : False
                 }
               }
 ffc_options = {"optimize"               : True}
@@ -365,6 +366,11 @@ solver.parameters.update(params)
 # start the timer :
 start_time = time()
 
+stars = "*****************************************************************"
+initial_dt      = dt
+initial_alpha   = params['newton_solver']['relaxation_parameter']
+adaptive        = False
+
 # loop over all times :
 while t < tf:
 
@@ -375,7 +381,50 @@ while t < tf:
   tic = time()
 
   # Compute solution
-  solver.solve()
+  if not adaptive:
+    solver.solve()
+  
+  ## solve mass equations, lowering time step on failure :
+  #if adaptive:
+  #  par    = params['newton_solver']
+  #  solved_h = False
+  #  while not solved_h:
+  #    if dt < DOLFIN_EPS:
+  #      status_h = [False,False]
+  #      break
+  #    w_temp   = w.copy(True)
+  #    w1_temp  = w1.copy(True)
+  #    status_h = solver.solve()
+  #    solved_h = status_h[1]
+  #    if not solved_h:
+  #      dt /= 2.0
+  #      print_text(stars, 'red', 1)
+  #      s = ">>> WARNING: time step lowered to %g <<<"
+  #      print_text(s % dt, 'red', 1)
+  #      w.assign(w_temp)
+  #      w1.assign(w1_temp)
+  #      print_text(stars, 'red', 1)
+  
+  # solve equation, lower alpha on failure :
+  if adaptive:
+    solved_u = False
+    par    = params['newton_solver']
+    while not solved_u:
+      if par['relaxation_parameter'] < 0.5:
+        status_u = [False, False]
+        break
+      w_temp   = w.copy(True)
+      w1_temp  = w1.copy(True)
+      status_u = solver.solve()
+      solved_u = status_u[1]
+      if not solved_u:
+        w.assign(w_temp)
+        w1.assign(w1_temp)
+        par['relaxation_parameter'] /= 1.4
+        print_text(stars, 'red', 1)
+        s = ">>> WARNING: newton relaxation parameter lowered to %g <<<"
+        print_text(s % par['relaxation_parameter'], 'red', 1)
+        print_text(stars, 'red', 1)
 
   jn, rho_gn,  rho_Wn,  rho_An,  rho_Cn,  Tn = w.split(True)
   
@@ -391,6 +440,15 @@ while t < tf:
   print_text(s % (t, time()-tic), 'red', 1)
 
   t += dt
+  
+  # for the subsequent iteration, reset the parameters to normal :
+  if adaptive:
+    if par['relaxation_parameter'] != initial_alpha:
+      print_text("::: resetting alpha to normal :::", 'green')
+      par['relaxation_parameter'] = initial_alpha
+    if dt != initial_dt:
+      print_text("::: resetting dt to normal :::", 'green')
+      dt = initial_dt
 
 # calculate total time to compute
 sec = time() - start_time
@@ -401,7 +459,18 @@ mnn = mnn % 60
 text = "total time to perform transient run: %02d:%02d:%02d" % (hor,mnn,sec)
 print_text(text, 'red', 1)
 
-File('T.pvd') << Tn
-File('j.pvd') << jn
+Tn.rename('T', '')
+jn.rename('j', '')
+rho_gn.rename('rho_g', '')
+rho_Wn.rename('rho_W', '')
+rho_An.rename('rho_A', '')
+rho_Cn.rename('rho_C', '')
+
+File('T.pvd')     << Tn
+File('j.pvd')     << jn
+File('rho_g.pvd') << rho_gn
+File('rho_W.pvd') << rho_Wn
+File('rho_A.pvd') << rho_An
+File('rho_C.pvd') << rho_Cn
 
 
