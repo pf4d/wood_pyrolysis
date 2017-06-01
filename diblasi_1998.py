@@ -1,5 +1,8 @@
 from fenics import *
 from time   import time
+from helper import print_text, print_min_max
+
+parameters['form_compiler']['quadrature_degree'] = 2
 
 # constants :
 R          = 8.3144      # universal gas constant
@@ -16,7 +19,7 @@ E_W        = 242.4e3
 E_C        = 150.5e3
 E_r        = 196.5e3
 
-nu_G       = 0.65
+nu_g       = 0.65
 nu_C       = 0.35
 delta_h_W  = 0.0
 delta_h_C  = -418.0e3
@@ -26,7 +29,6 @@ c_A        = 2.3e3
 c_g        = 1.8e3
 c_C        = 1.1e3
 c_r        = 1.1e3      # FIXME: missing for tar
-k_g        = 25.77e-3
 mu         = 3e-5       # gas viscosity
 omega      = 1.0        # emissiviy
 h_c        = 20         # convective heat transfer coefficent
@@ -38,25 +40,39 @@ d          = as_vector([d_x,   d_y  ])
 
 # permeability :
 B_W_x      = 1e-14
-B_A_x      = 1e-14
-B_C_x      = 5e-12
-B_W_y      = 1e-11
-B_A_y      = 1e-11
-B_C_y      = 5e-11
+B_W_y      = 1e-14
+#B_W_y      = 1e-11
 B_W        = as_vector([B_W_x, B_W_y])
+
+B_A_x      = 1e-14
+B_A_y      = 1e-14
+#B_A_y      = 1e-11
 B_A        = as_vector([B_A_x, B_A_y])
+
+B_C_x      = 5e-12
+B_C_y      = 5e-12
+#B_C_y      = 5e-11
 B_C        = as_vector([B_C_x, B_C_y])
 
 # thermal conductivity :
 k_W_x      = 10.5e-2
-k_A_x      = 10.5e-2
-k_C_x      = 7.1e-2
-k_W_y      = 25.5e-2
-k_A_y      = 25.5e-2
-k_C_y      = 10.46e-2
+k_W_y      = 10.5e-2
+#k_W_y      = 25.5e-2
 k_W        = as_vector([k_W_x, k_W_y])
+
+k_A_x      = 10.5e-2
+k_A_y      = 10.5e-2
+#k_A_y      = 25.5e-2
 k_A        = as_vector([k_A_x, k_A_y])
+
+k_C_x      = 7.1e-2
+k_C_y      = 7.1e-2
+#k_C_y      = 10.46e-2
 k_C        = as_vector([k_C_x, k_C_y])
+
+k_g_x      = 25.77e-3
+k_g_y      = 25.77e-3
+k_g        = as_vector([k_g_x, k_g_y])
 
 # gravitational acceleration vector :
 g          = as_vector([0.0, -g_a])
@@ -66,16 +82,16 @@ T_0        = 300.0
 rho_W_0    = 400.0
 rho_A_0    = 0.0
 rho_C_0    = 0.0
-V_S_0      = 1.0
+V_S_0      = 0.4
 p_0        = 1e5
 W_g        = 2.897e-2  # FIXME: need molecular weight of gas
 rho_g_0    = p_0 * W_g / (R * T_0)
 
 # time parameters :
-dt         = 0.1         # time step
-t0         = 0.0         # start time
-t          = t0          # current time
-tf         = 60.0*60.0   # final time
+dt         = 0.01                       # time step
+t0         = 0.0                        # start time
+t          = t0                         # current time
+tf         = 5                          # final time
 
 # boundary conditions :
 T_inf      = 900.0                      # ambient temperature
@@ -87,7 +103,7 @@ rho_g_inf  = Expression('p_inf * W_g / (R * Tp)', \
 
 # mesh varaiables :
 tau        = 1.0e-2                     # width of domain
-dn         = 32                         # number of elements
+dn         = 32                        # number of elements
 
 
 # volume of solid :
@@ -96,7 +112,7 @@ def V_S(rho_W, rho_C, rho_A):
 
 # reaction-rate factor :
 def K(T, A, E):
-  return A * exp( - E / RT)
+  return A * exp( - E / (R * T) )
 
 # virgin wood reaction rate factor :
 def K_W(T):
@@ -171,92 +187,180 @@ def j_T(rho_W, rho_A, rho_g, T, V):
 # enthalpy variation due to chemical reactions :
 def q_r(rho_W, rho_A, T):
   q_r_v = + K_W(T)*rho_W*(delta_h_W + (T - T_0)*(c_W - c_A)) \
-          + K_C(T)*rho_A*(delta_h_C + (T - T_0)*(c_A - nu_C*c_C - nu_g*c_G)) \
+          + K_C(T)*rho_A*(delta_h_C + (T - T_0)*(c_A - nu_C*c_C - nu_g*c_g)) \
           + K_r(T)*rho_A*(delta_h_r + (T - T_0)*(c_A - c_r))
   return q_r_v
 
 # temperature flux boundary condition :
-def k_grad_T(T):
-  k_grad_T_v = - omega * sigma * (T**4 - T_inf**4) - h_c * (T - T_inf)
-  return as_vector([k_grad_T_v, k_grad_T_v])
+def kdTdn(T):
+  return - omega * sigma * (T**4 - T_inf**4) - h_c * (T - T_inf)
 
 # time derivative :
 def dudt(u,u1):  return (u - u1) / dt
 
 # create a mesh :
-p1    = Point(0.0, 0.0)                  # origin
-p2    = Point(tau, tau)                  # x, y corner 
-mesh  = RectangleMesh(p1, p2, dn, dn)    # a box to fill the void 
+p1     = Point(0.0, 0.0)                  # origin
+p2     = Point(tau, tau)                  # x, y corner 
+mesh   = RectangleMesh(p1, p2, dn, dn)    # a box to fill the void 
 
 # define finite elements spaces and build mixed space :
-BDM   = FiniteElement("BDM", mesh.ufl_cell(), 1)
-DG    = FiniteElement("DG",  mesh.ufl_cell(), 0)
-CG    = FiniteElement("CG",  mesh.ufl_cell(), 1)
-We    = MixedElement([BDM, DG, CG, CG, CG, CG])
-W     = FunctionSpace(mesh, We)
+BDMe   = FiniteElement("BDM", mesh.ufl_cell(), 1)
+DGe    = FiniteElement("DG",  mesh.ufl_cell(), 0)
+CGe    = FiniteElement("CG",  mesh.ufl_cell(), 1)
+BDM    = FunctionSpace(mesh, BDMe)
+DG     = FunctionSpace(mesh, DGe)
+CG     = FunctionSpace(mesh, CGe)
+VCG    = VectorFunctionSpace(mesh, 'CG', 1)
+We     = MixedElement([BDMe, DGe, DGe, DGe, DGe, CGe])
+W      = FunctionSpace(mesh, We)
+
+def boundary(x, on_boundary):
+  return on_boundary
+
+bc = DirichletBC(W.sub(5), 400, boundary)
 
 # outward-facing normal vector :
-n     = FacetNormal(mesh)
+n      = FacetNormal(mesh)
+h      = CellSize(mesh)
+V      = Constant(1.0)#CellVolume(mesh)
 
 # define trial and test functions :
-dW        = TrialFunction(W)
-Phi       = TestFunction(W)
-w         = Function(W)
-w1        = Function(W)
+Phi    = TestFunction(W)
+dw     = TrialFunction(W)
+w      = Function(W)
+w1     = Function(W)
 
 # get the individual functions :
-phi,   psi,    xi,     chi,    zeta,   beta  = Phi.split()
-j,     rho_g,  rho_W,  rho_r,  rho_C,  T     = w.split()
-j1,    rho_g1, rho_W1, rho_r1, rho_C1, T     = w1.split()
+phi_x,   phi_y,    psi,    xi,     chi,    zeta,   beta  = Phi
+j_g_x,   j_g_y,    rho_g,  rho_W,  rho_A,  rho_C,  T     = w
+j1_g_x,  j1_g_y,   rho_g1, rho_W1, rho_A1, rho_C1, T1    = w1
+
+phi    = as_vector([phi_x,  phi_y ])
+j_g    = as_vector([j_g_x,  j_g_y ])
+j1_g   = as_vector([j1_g_x, j1_g_y])
+
+# set initial conditions:
+ji     = interpolate(Constant((0.0,0.0)), BDM)
+rho_gi = interpolate(Constant(rho_g_0),   DG)
+rho_Wi = interpolate(Constant(rho_W_0),   DG)
+rho_Ai = interpolate(Constant(rho_A_0),   DG)
+rho_Ci = interpolate(Constant(rho_C_0),   DG)
+Ti     = interpolate(Constant(T_0),       CG)
+
+# assign initial values :
+assign(w,  [ji, rho_gi, rho_Wi, rho_Ai, rho_Ci, Ti])
+
+# pressure gradient flow integrated by parts :
+j_g_p_x       = - rho_g * B(rho_W, rho_A)[0] / mu * p(rho_g, T)
+j_g_p_y       = - rho_g * B(rho_W, rho_A)[1] / mu * p(rho_g, T)
+
+# boundary gas flux :
+j_g_p_inf_x   = - rho_g_inf * B(rho_W, rho_A)[0] / mu * p(rho_g_inf, T)
+j_g_p_inf_y   = - rho_g_inf * B(rho_W, rho_A)[1] / mu * p(rho_g_inf, T)
+
+# gravitational flow :
+j_g_g_x       = - rho_g * B(rho_W, rho_A)[0] / mu * rho_g*g[0]
+j_g_g_y       = - rho_g * B(rho_W, rho_A)[1] / mu * rho_g*g[1]
+j_g_g         = as_vector([j_g_g_x, j_g_g_y])
 
 # gas mass flux residual :
-j_p           = - rho_g * B(rho_W, rho_A) / mu * p(rho_g, T)
-j_p_inf       = - rho_g_inf * B(rho_W, rho_A) / mu * p(rho_g_inf, T_inf)
-j_g           = - rho_g * B(rho_W, rho_A) / mu * rho_g*g
-delta_j_rho_g = + dot(j, phi) * dx \
-                + div(phi) * j_p * dx \
-                - j_p_inf * dot(phi, n) * ds \
-                - dot(j_g, phi) * dx
+delta_j_rho_g = + dot(j_g, phi) * dx \
+                + j_g_p_x * phi[0].dx(0) * dx \
+                + j_g_p_y * phi[1].dx(1) * dx \
+                - j_g_p_inf_x * phi[0] * n[0] * ds \
+                - j_g_p_inf_y * phi[1] * n[1] * ds \
+#                - dot(j_g_g, phi) * dx
 
 # gas mass balance residual :
 ep1           = epsilon(rho_W1, rho_C1, rho_A1, V)
 ep            = epsilon(rho_W,  rho_C,  rho_A,  V)
 delta_rho_g   = + dudt(ep*rho_g, ep1*rho_g1) * psi * dx \
-                + div(j) * psi * dx \
-                - (nu_G*r_C(rho_A, T) + r_t(rho_A, T))*psi*dx
+                + div(j_g) * psi * dx \
+                - (nu_g*r_C(rho_A, T) + r_r(rho_A, T))*psi*dx
 
 # virgin solid wood mass balance :
 delta_rho_W   = + dudt(rho_W, rho_W1) * xi * dx \
                 + r_W(rho_W, T) * xi * dx
 
 # active intermediate solid wood (tar) mass balance :
-delta_rho_r   = + dudt(rho_A, rho_A1) * chi * dx \
-                + (r_C(rho_A, T) + r_t(rho_A, T) - r_W(rho_W, T)) * chi * dx
+delta_rho_A   = + dudt(rho_A, rho_A1) * chi * dx \
+                + (r_C(rho_A, T) + r_r(rho_A, T) - r_W(rho_W, T)) * chi * dx
 
 # solid char mass balance :
 delta_rho_C   = + dudt(rho_C, rho_C1) * zeta * dx \
                 - nu_C * r_C(rho_A, T) * zeta * dx
+ 
+# intrinsic time parameter :
+def tau(u, v, k):
+  order = 1
+
+  # the Peclet number : 
+  Unorm  = sqrt(dot(v, v) + DOLFIN_EPS)
+  knorm  = sqrt(dot(k, k) + DOLFIN_EPS)
+  PE     = Unorm * h / (2*knorm)
+
+  # for linear elements :
+  if order == 1:
+    xi     = 1/tanh(PE) - 1/PE
+
+  # for quadradic elements :
+  if order == 2:
+    xi_1  = 0.5*(1/tanh(PE) - 2/PE)
+    xi    =     ((3 + 3*PE*xi_1)*tanh(PE) - (3*PE + PE**2*xi_1)) \
+             /  ((2 - 3*xi_1*tanh(PE))*PE**2)
+  
+  # intrinsic time parameter :
+  tau_n = h*xi / (2 * Unorm)
+  return tau_n
+
+tau_T    = tau(T, j_g, k(rho_W, rho_C, rho_A, T, V))
+
+# advective temerature flux :
+def L_T_adv(u):
+  return c_g * dot(j_g, grad(u))
+
+# advective and diffusive temperature differential operator :
+def L_T(u):  
+  Lu = + L_T_adv(u) \
+       - ( k(rho_W, rho_C, rho_A, u, V)[0] * u.dx(0) ).dx(0) \
+       - ( k(rho_W, rho_C, rho_A, u, V)[1] * u.dx(1) ).dx(1)
+  return Lu
 
 # enthalpy balance :
 T_factor      = (rho_C*c_C + rho_W*c_W + rho_A*c_A + ep*rho_g*c_g)
 delta_T       = + T_factor * dudt(T, T1) * beta * dx \
-                + c_g*dot(j, grad(T)) * beta * dx \
-                + k(rho_W, rho_C, rho_A, T, V) * dot(grad(T), grad(beta)) * dx \
-                - dot(k_grad_T(T), n) * beta * dx \
-                - q_r(rho_W, rho_A, T)
+                + L_T_adv(T) * beta * dx \
+                + k(rho_W, rho_C, rho_A, T, V)[0] * T.dx(0) * beta.dx(0) * dx \
+                + k(rho_W, rho_C, rho_A, T, V)[1] * T.dx(1) * beta.dx(1) * dx \
+                - q_r(rho_W, rho_A, T) * beta * dx \
+                - kdTdn(T) * beta * ds \
+                + inner(L_T_adv(beta), tau_T*L_T(T)) * dx
 
 # total residual :
-delta         = + delta_j_rho_g + delta_rho_g + delta_rho_W \
-                + delta_rho_r + delta_rho_C + delta_T
+delta         = delta_j_rho_g + delta_rho_g + delta_rho_W \
+                + delta_rho_A + delta_rho_C + delta_T
 
 # Jacobian :
-J             = derivative(delta, W, dW)
+J             = derivative(delta, w, dw)
 
-# define essential boundary :
-def boundary(x, on_boundary
-  return on_boundary 
+params      = {'newton_solver' :
+                {
+                  'linear_solver'           : 'mumps',
+                  #'preconditioner'          : 'hypre_amg',
+                  'absolute_tolerance'      : 1e-14,
+                  'relative_tolerance'      : 1e-6,
+                  'relaxation_parameter'    : 1.0,
+                  'maximum_iterations'      : 10,
+                  'error_on_nonconvergence' : True
+                }
+              }
+ffc_options = {"optimize"               : True}
+#ffc_options = {}
 
-bc = DirichletBC(W.sub(0), G, boundary) #FIXME
+problem = NonlinearVariationalProblem(delta, w, J=J, bcs=bc,
+            form_compiler_parameters=ffc_options)
+solver  = NonlinearVariationalSolver(problem)
+solver.parameters.update(params)
 
 # start the timer :
 start_time = time()
@@ -264,12 +368,23 @@ start_time = time()
 # loop over all times :
 while t < tf:
 
+  # set the previous solution to the last iteration :
+  w1.assign(w)
+
   # start the timer :
   tic = time()
 
   # Compute solution
-  solve(delta == 0, w, J=J, bcs=bc)
-  j,u = w.split()
+  solver.solve()
+
+  jn, rho_gn,  rho_Wn,  rho_An,  rho_Cn,  Tn = w.split(True)
+  
+  print_min_max(jn,     'j')
+  print_min_max(rho_gn, 'rho_g')
+  print_min_max(rho_Wn, 'rho_W')
+  print_min_max(rho_An, 'rho_A')
+  print_min_max(rho_Cn, 'rho_C')
+  print_min_max(Tn,     'T')
   
   # increment time step :
   s = '>>> Time: %g s, CPU time for last dt: %.3f s <<<'
@@ -286,10 +401,7 @@ mnn = mnn % 60
 text = "total time to perform transient run: %02d:%02d:%02d" % (hor,mnn,sec)
 print_text(text, 'red', 1)
 
-# Plot sigma and u
-plot(j)
-plot(u)
-interactive()
-
+File('T.pvd') << Tn
+File('j.pvd') << jn
 
 
