@@ -46,12 +46,10 @@ d          = as_vector([4e-5,   4e-5  ])
 
 # permeability :
 B_W        = as_vector([1e-14, 1e-11])
-B_A        = as_vector([1e-14, 1e-11])
 B_C        = as_vector([5e-12, 5e-11])
 
 # thermal conductivity :
 k_W        = as_vector([10.5e-2,  25.5e-2])
-k_A        = as_vector([10.5e-2,  25.5e-2])
 k_C        = as_vector([7.1e-2,   10.46e-2])
 k_g        = as_vector([25.77e-3, 25.77e-3])
 
@@ -59,11 +57,11 @@ k_g        = as_vector([25.77e-3, 25.77e-3])
 g          = as_vector([0.0, -g_a])
 
 # time parameters :
-dt         = 0.1                        # time step
+dt         = 0.2                        # time step
 t0         = 0.0                        # start time
 t          = t0                         # current time
 t1         = dt                         # equilibrium time
-tf         = 30.0                        # final time
+tf         = 32.0                       # final time
 
 # file output :
 out_dir    = './output/'
@@ -72,28 +70,27 @@ out_dir    = './output/'
 # function space declarations :
 
 # mesh varaiables :
-tau        = 1.0e-2                           # width of domain
-dn         = 32                               # number of elements
-                                            
-# create a mesh :                           
-p1         = Point(0.0, 0.0)                  # origin
-p2         = Point(tau, tau)                  # x, y corner 
-mesh       = RectangleMesh(p1, p2, dn, dn)    # a box to fill the void 
+tau        = 1.0e-2                                   # width of domain
+dn         = 24                                       # number of elements
+                                                      
+# create a mesh :                                     
+p1         = Point(0.0, 0.0)                          # origin
+p2         = Point(tau, tau)                          # x, y corner 
+mesh       = RectangleMesh(p1, p2, dn, dn, "crossed") # a box to fill the void 
 
 # define finite elements spaces and build mixed space :
 BDMe       = FiniteElement("BDM", mesh.ufl_cell(), 1)
 DGe        = FiniteElement("DG",  mesh.ufl_cell(), 0)
 DG2e       = FiniteElement("DG",  mesh.ufl_cell(), 2)
 CGe        = FiniteElement("CG",  mesh.ufl_cell(), 1)
+We         = MixedElement([BDMe, DGe, DGe, DGe, DGe, CGe])
 BDM        = FunctionSpace(mesh, BDMe)
 DG         = FunctionSpace(mesh, DGe)
-DG2        = FunctionSpace(mesh, DG2e)
 CG         = FunctionSpace(mesh, CGe)
 VCG        = VectorFunctionSpace(mesh, 'CG', 1)
-We         = MixedElement([BDMe, DGe, DGe, DGe, DGe, CGe])
 W          = FunctionSpace(mesh, We)
 
-# outward-facing normal vector :
+# mesh variables :
 n          = FacetNormal(mesh)
 h          = CellSize(mesh)
 V          = CellVolume(mesh)
@@ -106,16 +103,13 @@ U1         = Function(W)
 
 # get the individual functions :
 phi_x,   phi_y,    psi,    xi,     chi,    zeta,   beta  = Phi
-u,       v,        rho_g,  rho_W,  rho_A,  rho_C,  T     = U
-u1,      v1,       rho_g1, rho_W1, rho_A1, rho_C1, T1    = U1
+u,       v,        p,      rho_W,  rho_A,  rho_C,  T     = U
+u1,      v1,       p1,     rho_W1, rho_A1, rho_C1, T1    = U1
 
 phi        = as_vector([phi_x,  phi_y ])
 U3         = as_vector([u,      v     ])
 U31        = as_vector([u1,     v1    ])
 
-# need a function for the temperature in order to set the gas density
-# boundary condition :
-Tp         = Function(CG)
 
 #===============================================================================
 # empirical relations and balance laws :
@@ -168,35 +162,19 @@ def k(rho_W, rho_C, rho_A, T, V):
         + sigma * T**3 * d / omega
   return k_v
 
-# permeability vector :
-def B(rho_W, rho_A):
+# gas density :
+def rho_g(p, T):
+  return p * W_g / (R * T)
+
+# inverse permeability tensor :
+def B_inv(rho_W, rho_A):
   B_v = + eta(rho_W, rho_A) * B_W \
         + (1 - eta(rho_W, rho_A)) * B_C
+  B_inv_xx = -mu / (rho_g(p,T) * B_v[0] + DOLFIN_EPS)
+  B_inv_yy = -mu / (rho_g(p,T) * B_v[1] + DOLFIN_EPS) 
+  B_v = as_matrix([[B_inv_xx, 0.0     ],
+                   [0.0,      B_inv_yy]])
   return B_v
-
-# gas pressure :
-def p(rho_g, T):
-  return rho_g * R * T / W_g
-
-# gas velocity from Darcy's law :
-def U3_f(rho_W, rho_A, rho_g, T):
-  return - B(rho_W, rho_A) / mu * ( grad(p(rho_g, T) + rho_g*g) )
-
-# gas mass flux :
-def j_rho_g(rho_W, rho_A, rho_g, T):
-  return rho_g * U3_f(rho_W, rho_A, rho_g, T)
-
-# advective temperature flux :
-def j_a_T(rho_W, rho_A, rho_g, T):
-  return c_g * j_rho_g(rho_W, rho_A, rho_g, T) * grad(T)
-
-# diffusive temperature flux :
-def j_d_T(rho_W, rho_C, rho_A, T, V):
-  return k(rho_W, rho_C, rho_A, T, V) * grad(T)
-
-# total temperature flux :
-def j_T(rho_W, rho_A, rho_g, T, V):
-  return j_a_T(rho_W, rho_A, rho_g, T) + j_d_T(rho_W, rho_A, T, V)
 
 # enthalpy variation due to chemical reactions :
 def q_r(rho_W, rho_A, T):
@@ -211,150 +189,6 @@ def kdTdn(T):
 
 # time derivative :
 def dudt(u,u1):  return (u - u1) / dt
-
-
-#===============================================================================
-# initial conditions :
-
-T_0        = 300.0
-rho_W_0    = 400.0
-rho_A_0    = 0.0
-rho_C_0    = 0.0
-V_S_0      = 0.4 * V
-p_0        = 1e5
-W_g        = 2.897e-2  # FIXME: need molecular weight of gas
-rho_g_0    = p_0 * W_g / (R * T_0)
-
-U3i        = interpolate(Constant((0.0,0.0)), BDM)
-rho_gi     = interpolate(Constant(rho_g_0),   DG)
-rho_Wi     = interpolate(Constant(rho_W_0),   DG)
-rho_Ai     = interpolate(Constant(rho_A_0),   DG)
-rho_Ci     = interpolate(Constant(rho_C_0),   DG)
-Ti         = interpolate(Constant(T_0),       CG)
-
-# assign initial values :
-assign(U,  [U3i, rho_gi, rho_Wi, rho_Ai, rho_Ci, Ti])
-
-# set the temperature for rho_g_inf boundary too :
-Tp.interpolate(Ti)
-
-#===============================================================================
-# boundary conditions for temperature and gas density by proxy of pressure :
-
-ff      = FacetFunction('size_t', mesh, 0)
-tol     = 1e-6
-
-# left   = 1
-# top    = 2
-# right  = 3
-# bottom = 4
-for f in facets(mesh):
-  n_f      = f.normal()
-  
-  if   n_f.x() > tol and abs(n_f.y()) < tol and f.exterior():
-    ff[f] = 1
-  elif abs(n_f.x()) < tol and n_f.y() > tol and f.exterior():
-    ff[f] = 2
-  elif n_f.x() < tol and abs(n_f.y()) < tol and f.exterior():
-    ff[f] = 3
-  elif abs(n_f.x()) < tol and n_f.y() < tol and f.exterior():
-    ff[f] = 4
-
-# the new measure :
-ds = Measure('ds', subdomain_data=ff)
-
-# the ambient boundary :
-dAmb = ds(1) + ds(2) + ds(3)
-    
-# boundary conditions :
-T_inf      = Constant(400.0)            # ambient temperatur
-p_inf      = Constant(p_0)              # ambient gas pressure
-
-# cellulosic fire curve (ISO-834) applied ambient temperature :
-class AmbientTemperature(Expression):
-  def __init__(self, t, element=None):
-    self.t = t
-  def eval(self, value, x):
-    if self.t < t1:
-      value[0] = T_0
-    else:
-      value[0] = T_0 + 345*np.log10(8*self.t/60.0 + 1)
-
-# ambient temperature for natural Neumann boundary condition :
-#T_inf      = AmbientTemperature(t0, element=CGe)
-
-# Define function G such that G \cdot n = g
-class BoundarySource(Expression):
-  def __init__(self, mesh, **kwargs):
-    self.mesh = mesh
-  def eval_cell(self, values, x, ufc_cell):
-    cell = Cell(self.mesh, ufc_cell.index)
-    n = cell.normal(ufc_cell.local_facet)
-    g = sin(5*x[0])
-    values[0] = g*n[0]
-    values[1] = g*n[1]
-  def value_shape(self):
-    return (2,)
-
-G_U3_dot_n = Constant((0.0, 0.0))
-
-bc_U = DirichletBC(W.sub(0), G_U3_dot_n, ff, 4)
-
-# define a list of boundary condition objects for solver :
-bc_T_left   = DirichletBC(W.sub(5), T_inf, ff, 1)
-bc_T_top    = DirichletBC(W.sub(5), T_inf, ff, 2)
-bc_T_right  = DirichletBC(W.sub(5), T_inf, ff, 3)
-bc_T_bottom = DirichletBC(W.sub(5), T_inf, ff, 4)
-bcs         = [bc_T_left, bc_T_top, bc_T_right, bc_T_bottom]
-#bcs         = []
-
-# the gas density boundary natural Dirichlet boundary condition :
-rho_g_inf  = Expression('p_inf * W_g / (R * Tp)', \
-                        p_inf=p_inf, W_g=W_g, R=R, Tp=Tp, degree=2)
-
-
-#===============================================================================
-# the variational formulation :
-
-# pressure gradient flow intgrand for integration by parts :
-u_p           = - B(rho_W, rho_A)[0] / mu * p(rho_g, T)
-v_p           = - B(rho_W, rho_A)[1] / mu * p(rho_g, T)
-
-# boundary gas velocity :
-u_p_inf       = - B(rho_W, rho_A)[0] / mu * p(rho_g_inf, T)
-v_p_inf       = - B(rho_W, rho_A)[1] / mu * p(rho_g_inf, T)
-
-# gravitational flow :
-u_g           = - B(rho_W, rho_A)[0] / mu * rho_g*g[0]
-v_g           = - B(rho_W, rho_A)[1] / mu * rho_g*g[1]
-U3_g          = as_vector([u_g, v_g])
-
-# gas velocity residual :
-delta_U3      = + dot(U3, phi) * dx \
-                + u_p * phi[0].dx(0) * dx \
-                + v_p * phi[1].dx(1) * dx \
-                - u_p_inf * phi[0] * n[0] * ds \
-                - v_p_inf * phi[1] * n[1] * ds \
-#                - dot(U3_g, phi) * dx
-
-# gas mass balance residual :
-ep1           = epsilon(rho_W1, rho_C1, rho_A1, V)
-ep            = epsilon(rho_W,  rho_C,  rho_A,  V)
-delta_rho_g   = + dudt(ep*rho_g, ep1*rho_g1) * psi * dx \
-                + div(rho_g * U3) * psi * dx \
-                - (nu_g*r_Cg(rho_A, T) + r_r(rho_A, T))*psi*dx
-
-# virgin solid wood mass balance :
-delta_rho_W   = + dudt(rho_W, rho_W1) * xi * dx \
-                + r_W(rho_W, T) * xi * dx
-
-# active intermediate solid wood (tar) mass balance :
-delta_rho_A   = + dudt(rho_A, rho_A1) * chi * dx \
-                + (r_Cg(rho_A, T) + r_r(rho_A, T) - r_W(rho_W, T)) * chi * dx
-
-# solid char mass balance :
-delta_rho_C   = + dudt(rho_C, rho_C1) * zeta * dx \
-                - nu_C * r_Cg(rho_A, T) * zeta * dx
  
 # intrinsic time parameter :
 def tau(u, v, k):
@@ -379,7 +213,124 @@ def tau(u, v, k):
   tau_n = h*xi / (2 * Unorm)
   return tau_n
 
-tau_T    = tau(T, U3, k(rho_W, rho_C, rho_A, T, V))
+
+#===============================================================================
+# initial conditions :
+
+T_0        = 300.0
+rho_W_0    = 400.0
+rho_A_0    = 0.0
+rho_C_0    = 0.0
+V_S_0      = 0.4 * V
+p_0        = 1e5
+W_g        = 2.897e-2  # FIXME: need molecular weight of gas
+rho_g_0    = p_0 * W_g / (R * T_0)
+
+U3i        = interpolate(Constant((0.0,0.0)), BDM)
+pi         = interpolate(Constant(p_0),       DG)
+rho_Wi     = interpolate(Constant(rho_W_0),   DG)
+rho_Ai     = interpolate(Constant(rho_A_0),   DG)
+rho_Ci     = interpolate(Constant(rho_C_0),   DG)
+Ti         = interpolate(Constant(T_0),       CG)
+
+# assign initial values :
+assign(U,  [U3i, pi, rho_Wi, rho_Ai, rho_Ci, Ti])
+
+#===============================================================================
+# boundary conditions for temperature and gas density by proxy of pressure :
+
+ff      = FacetFunction('size_t', mesh, 0)
+tol     = 1e-6
+
+# left   = 1      ----2---- 
+# top    = 2      |       3
+# right  = 3      1       |
+# bottom = 4      ----4----
+for f in facets(mesh):
+  n_f      = f.normal()
+  
+  if   n_f.x() > tol and abs(n_f.y()) < tol and f.exterior():
+    ff[f] = 1
+  elif abs(n_f.x()) < tol and n_f.y() > tol and f.exterior():
+    ff[f] = 2
+  elif n_f.x() < tol and abs(n_f.y()) < tol and f.exterior():
+    ff[f] = 3
+  elif abs(n_f.x()) < tol and n_f.y() < tol and f.exterior():
+    ff[f] = 4
+
+# the new measure :
+ds = Measure('ds', subdomain_data=ff)
+
+# the ambient boundary :
+dAmb = ds(1) + ds(2) + ds(3)
+    
+# boundary conditions :
+T_inf      = Constant(900.0)            # ambient temperatur
+p_inf      = Constant(p_0)              # ambient gas pressure
+
+# cellulosic fire curve (ISO-834) applied ambient temperature :
+class AmbientTemperature(Expression):
+  def __init__(self, t, element=None):
+    self.t = t
+  def eval(self, value, x):
+    if self.t < t1:
+      value[0] = T_0
+    else:
+      value[0] = T_0 + 345*np.log10(8*self.t/60.0 + 1)
+
+def entire_boundary(x, on_boundary):
+  return on_boundary
+
+# ambient temperature for natural Neumann boundary condition :
+#T_inf      = AmbientTemperature(t0, element=CGe)
+
+# define a list of boundary condition objects for solver :
+#bc_T_left   = DirichletBC(W.sub(5), T_inf, ff, 1)
+#bc_T_top    = DirichletBC(W.sub(5), T_inf, ff, 2)
+#bc_T_right  = DirichletBC(W.sub(5), T_inf, ff, 3)
+#bc_T_bottom = DirichletBC(W.sub(5), T_inf, ff, 4)
+#bc_T        = DirichletBC(W.sub(5), T_inf, entire_boundary)
+#bcs         = [bc_T_left, bc_T_top, bc_T_right, bc_T_bottom]
+bcs         = []
+
+
+#===============================================================================
+# the variational formulation :
+
+# midpoint values (Crank-Nicolson) :
+ep1           = epsilon(rho_W1, rho_C1, rho_A1, V)
+ep            = epsilon(rho_W,  rho_C,  rho_A,  V)
+p_mid         = 0.5 * (p + p1)
+rho_g_mid     = 0.5 * (ep*rho_g(p,T) + ep1*rho_g(p1,T1))
+rho_W_mid     = 0.5 * (rho_W + rho_W1)
+rho_A_mid     = 0.5 * (rho_A + rho_A1)
+rho_C_mid     = 0.5 * (rho_C + rho_C1)
+T_mid         = 0.5 * (T + T1)
+
+# gas velocity residual :
+delta_U3      = + dot(U3, B_inv(rho_W_mid, rho_A_mid)*phi) * dx \
+                + p_mid * div(phi) * dx \
+                - p_inf * dot(phi, n) * ds \
+                - dot(rho_g_mid*g, phi) * dx
+
+# gas mass balance residual :
+delta_rho_g   = + dudt(ep*rho_g(p, T), ep1*rho_g(p1, T1)) * psi * dx \
+                + div(U3) * psi * dx \
+                - (nu_g*r_Cg(rho_A_mid, T) + r_r(rho_A_mid, T_mid))*psi*dx
+
+# virgin solid wood mass balance :
+delta_rho_W   = + dudt(rho_W, rho_W1) * xi * dx \
+                + r_W(rho_W_mid, T) * xi * dx
+
+# active intermediate solid wood (tar) mass balance :
+delta_rho_A   = + dudt(rho_A, rho_A1) * chi * dx \
+                + (  + r_Cg(rho_A_mid, T_mid) \
+                     + r_r(rho_A_mid, T_mid) \
+                     - r_W(rho_W_mid, T_mid)  ) * chi * dx
+
+# solid char mass balance :
+delta_rho_C   = + dudt(rho_C, rho_C1) * zeta * dx \
+                - nu_C * r_Cg(rho_A_mid, T_mid) * zeta * dx
 
 # advective temerature flux :
 def L_T_adv(u):
@@ -388,19 +339,23 @@ def L_T_adv(u):
 # advective and diffusive temperature differential operator :
 def L_T(u):  
   Lu = + L_T_adv(u) \
-       - ( k(rho_W, rho_C, rho_A, u, V)[0] * u.dx(0) ).dx(0) \
-       - ( k(rho_W, rho_C, rho_A, u, V)[1] * u.dx(1) ).dx(1)
+       - ( k(rho_W_mid, rho_C_mid, rho_A_mid, u, V)[0] * u.dx(0) ).dx(0) \
+       - ( k(rho_W_mid, rho_C_mid, rho_A_mid, u, V)[1] * u.dx(1) ).dx(1)
   return Lu
 
 # enthalpy balance :
-T_factor      = (rho_C*c_C + rho_W*c_W + rho_A*c_A + ep*rho_g*c_g)
+tau_T         = tau(T_mid, U3, k(rho_W_mid, rho_C_mid, rho_A_mid, T_mid, V))
+T_factor      = + rho_C_mid*c_C + rho_W_mid*c_W \
+                + rho_A_mid*c_A + rho_g_mid*c_g
 delta_T       = + T_factor * dudt(T, T1) * beta * dx \
-                + L_T_adv(T) * beta * dx \
-                + k(rho_W, rho_C, rho_A, T, V)[0] * T.dx(0) * beta.dx(0) * dx \
-                + k(rho_W, rho_C, rho_A, T, V)[1] * T.dx(1) * beta.dx(1) * dx \
-                - q_r(rho_W, rho_A, T) * beta * dx \
-                - kdTdn(T) * beta * ds \
-#                + inner(L_T_adv(beta), tau_T*L_T(T)) * dx \
+                + L_T_adv(T_mid) * beta * dx \
+                + k(rho_W_mid, rho_C_mid, rho_A_mid, T_mid, V)[0] \
+                    * T_mid.dx(0) * beta.dx(0) * dx \
+                + k(rho_W_mid, rho_C_mid, rho_A_mid, T_mid, V)[1] \
+                    * T_mid.dx(1) * beta.dx(1) * dx \
+                - q_r(rho_W_mid, rho_A_mid, T_mid) * beta * dx \
+                - kdTdn(T_mid) * beta * ds \
+#                + inner(L_T_adv(beta), tau_T*L_T(T_mid)) * dx \
 
 
 #===============================================================================
@@ -419,10 +374,10 @@ params      = {'newton_solver' :
                   #'linear_solver'           : 'tfqmr',
                   #'preconditioner'          : 'jacobi',
                   'absolute_tolerance'      : 1e-14,
-                  'relative_tolerance'      : 1e-8,
+                  'relative_tolerance'      : 1e-9,
                   'relaxation_parameter'    : 1.0,
-                  'maximum_iterations'      : 16,
-                  'error_on_nonconvergence' : False
+                  'maximum_iterations'      : 20,
+                  'error_on_nonconvergence' : True
                 }
               }
 ffc_options = {"optimize"               : True}
@@ -439,7 +394,7 @@ start_time = time()
 stars = "*****************************************************************"
 initial_dt      = dt
 initial_alpha   = params['newton_solver']['relaxation_parameter']
-adaptive        = True
+adaptive        = False
 
 # loop over all times :
 while t < tf:
@@ -496,10 +451,10 @@ while t < tf:
         print_text(s % par['relaxation_parameter'], 'red', 1)
         print_text(stars, 'red', 1)
 
-  U3n, rho_gn,  rho_Wn,  rho_An,  rho_Cn,  Tn = U.split(True)
+  U3n, pn,  rho_Wn,  rho_An,  rho_Cn,  Tn = U.split(True)
   
   print_min_max(U3n,    'U3')
-  print_min_max(rho_gn, 'rho_g')
+  print_min_max(pn,     'p')
   print_min_max(rho_Wn, 'rho_W')
   print_min_max(rho_An, 'rho_A')
   print_min_max(rho_Cn, 'rho_C')
@@ -513,7 +468,6 @@ while t < tf:
   
   # evolve boundary condition :
   T_inf.t = t
-  Tp.interpolate(Tn)
   
   # for the subsequent iteration, reset the parameters to normal :
   if adaptive:
@@ -536,8 +490,8 @@ mnn = mnn % 60
 text = "total time to perform transient run: %02d:%02d:%02d" % (hor,mnn,sec)
 print_text(text, 'red', 1)
 
-U3n = project(U3n, VCG)
-pn  = project(p(rho_gn, Tn) / p_0, CG)
+U3n    = project(U3n, VCG)
+rho_gn = project(rho_g(pn, Tn), DG)
 
 U3n.rename('U3', '')
 pn.rename('p',   '')
