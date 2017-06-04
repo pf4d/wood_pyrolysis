@@ -1,7 +1,14 @@
-from fenics  import *
-from time    import time
-from helper  import print_text, print_min_max
-import numpy     as np
+from fenics   import *
+from time     import time
+from helper   import *
+import numpy      as np
+import matplotlib as mpl
+
+mpl.rcParams['font.family']          = 'serif'
+mpl.rcParams['legend.fontsize']      = 'medium'
+mpl.rcParams['text.usetex']          = True
+mpl.rcParams['text.latex.preamble']  = ['\usepackage[mathscr]{euscript}']
+#mpl.rcParams['contour.negative_linestyle']   = 'solid'
 
 parameters['form_compiler']['quadrature_degree'] = 2
 
@@ -61,10 +68,11 @@ dt         = 0.2                        # time step
 t0         = 0.0                        # start time
 t          = t0                         # current time
 t1         = dt                         # equilibrium time
-tf         = 32.0                       # final time
+tf         = 63.0                       # final time
 
 # file output :
 out_dir    = './output/'
+plt_dir    = './images/'
 
 #===============================================================================
 # function space declarations :
@@ -154,12 +162,16 @@ def epsilon(rho_W, rho_C, rho_A, V):
 def eta(rho_W, rho_A):
   return (rho_A + rho_W) / rho_W_0
 
-# thermal conductivity vector :
+# thermal conductivity tensor :
 def k(rho_W, rho_C, rho_A, T, V):
   k_v = + eta(rho_W, rho_A) * k_W \
         + (1 - eta(rho_W, rho_A)) * k_C \
         + epsilon(rho_W, rho_C, rho_A, V) * k_g \
         + sigma * T**3 * d / omega
+  k_xx = k_v[0]
+  k_yy = k_v[1]
+  k_v  = as_matrix([[k_xx, 0.0 ],
+                    [0.0,  k_yy]])
   return k_v
 
 # gas density :
@@ -222,7 +234,7 @@ rho_W_0    = 400.0
 rho_A_0    = 0.0
 rho_C_0    = 0.0
 V_S_0      = 0.4 * V
-p_0        = 1e5
+p_0        = 1e5#8e3
 W_g        = 2.897e-2  # FIXME: need molecular weight of gas
 rho_g_0    = p_0 * W_g / (R * T_0)
 
@@ -344,15 +356,13 @@ def L_T(u):
   return Lu
 
 # enthalpy balance :
-tau_T         = tau(T_mid, U3, k(rho_W_mid, rho_C_mid, rho_A_mid, T_mid, V))
+#tau_T         = tau(T_mid, U3, k(rho_W_mid, rho_C_mid, rho_A_mid, T_mid, V))
 T_factor      = + rho_C_mid*c_C + rho_W_mid*c_W \
                 + rho_A_mid*c_A + rho_g_mid*c_g
+k_t           = k(rho_W_mid, rho_C_mid, rho_A_mid, T_mid, V)
 delta_T       = + T_factor * dudt(T, T1) * beta * dx \
                 + L_T_adv(T_mid) * beta * dx \
-                + k(rho_W_mid, rho_C_mid, rho_A_mid, T_mid, V)[0] \
-                    * T_mid.dx(0) * beta.dx(0) * dx \
-                + k(rho_W_mid, rho_C_mid, rho_A_mid, T_mid, V)[1] \
-                    * T_mid.dx(1) * beta.dx(1) * dx \
+                + inner( k_t * grad(T_mid), grad(beta)) * dx \
                 - q_r(rho_W_mid, rho_A_mid, T_mid) * beta * dx \
                 - kdTdn(T_mid) * beta * ds \
 #                + inner(L_T_adv(beta), tau_T*L_T(T_mid)) * dx \
@@ -388,6 +398,66 @@ problem = NonlinearVariationalProblem(delta, U, J=J, bcs=bcs,
 solver  = NonlinearVariationalSolver(problem)
 solver.parameters.update(params)
 
+def plot(U,t):
+  """
+  function saves a nice plot of the function ``U`` at time ``t``.
+  """
+  U3n, pn,  rho_Wn,  rho_An,  rho_Cn,  Tn = U.split(True)
+
+  U3n    = project(U3n, VCG)
+  rho_gn = project(rho_g(pn, Tn), DG)
+  
+  # efficiently calculate overpressure p / p_0 :
+  p_rat_v = pn.vector().array() / p_0
+  p_rat   = Function(DG, name="p_rat")
+  p_rat.vector().set_local(p_rat_v)
+  
+  #U3n.rename('U3', '')
+  #pn.rename('p',   '')
+  #rho_gn.rename('rho_g', '')
+  #rho_Wn.rename('rho_W', '')
+  #rho_An.rename('rho_A', '')
+  #rho_Cn.rename('rho_C', '')
+  #Tn.rename('T', '')
+  #
+  #File(out_dir + 'U3.pvd')    << U3n
+  #File(out_dir + 'p.pvd')     << pn
+  #File(out_dir + 'rho_g.pvd') << rho_gn
+  #File(out_dir + 'rho_W.pvd') << rho_Wn
+  #File(out_dir + 'rho_A.pvd') << rho_An
+  #File(out_dir + 'rho_C.pvd') << rho_Cn
+  #File(out_dir + 'T.pvd')     << Tn
+  
+  dp = 0.025
+  
+  plot_variable(u = U3n, name = 'U_%g' % t, direc = plt_dir,
+                ext                 = '.pdf',
+                title               = r'$\Vert \mathbf{u} \Vert_{t=%g}$' % t,
+                levels              = None,
+                numLvls             = 6,
+                cmap                = 'viridis',
+                tp                  = False,
+                show                = False,
+                vec_scale           = None,
+                vec_alpha           = 0.8,
+                normalize_vec       = False,
+                extend              = 'neither',
+                cb_format           = '%.1e')
+  
+  plot_variable(u = p_rat, name = 'p_rat_%g' % t, direc = plt_dir,
+                ext                 = '.pdf',
+                title               = r'$\frac{p}{p_0}\Big|_{t=%g}$' % t,
+                levels              = None,
+                numLvls             = 9,
+                umin                = 1,
+                umax                = 1 + dp*8,
+                scale               = 'lin',
+                cmap                = 'viridis',
+                tp                  = True,
+                show                = False,
+                extend              = 'max',
+                cb_format           = '%.3f')
+
 # start the timer :
 start_time = time()
 
@@ -395,12 +465,17 @@ stars = "*****************************************************************"
 initial_dt      = dt
 initial_alpha   = params['newton_solver']['relaxation_parameter']
 adaptive        = False
+plot_times      = [31.0, 63.0, 93.0, 125.0]
+times           = arange(t0, tf+dt, dt)
 
 # loop over all times :
-while t < tf:
+for t in times:
 
   # set the previous solution to the last iteration :
   U1.assign(U)
+  
+  # evolve boundary condition :
+  T_inf.t = t
 
   # start the timer :
   tic = time()
@@ -464,10 +539,8 @@ while t < tf:
   s = '>>> Time: %g s, CPU time for last dt: %.3f s <<<'
   print_text(s % (t, time()-tic), 'red', 1)
 
-  t += dt
-  
-  # evolve boundary condition :
-  T_inf.t = t
+  # save a plot :
+  if t in plot_times: plot(U,t)
   
   # for the subsequent iteration, reset the parameters to normal :
   if adaptive:
@@ -489,25 +562,6 @@ sec = sec % 60
 mnn = mnn % 60
 text = "total time to perform transient run: %02d:%02d:%02d" % (hor,mnn,sec)
 print_text(text, 'red', 1)
-
-U3n    = project(U3n, VCG)
-rho_gn = project(rho_g(pn, Tn), DG)
-
-U3n.rename('U3', '')
-pn.rename('p',   '')
-rho_gn.rename('rho_g', '')
-rho_Wn.rename('rho_W', '')
-rho_An.rename('rho_A', '')
-rho_Cn.rename('rho_C', '')
-Tn.rename('T', '')
-
-File(out_dir + 'U3.pvd')    << U3n
-File(out_dir + 'p.pvd')     << pn
-File(out_dir + 'rho_g.pvd') << rho_gn
-File(out_dir + 'rho_W.pvd') << rho_Wn
-File(out_dir + 'rho_A.pvd') << rho_An
-File(out_dir + 'rho_C.pvd') << rho_Cn
-File(out_dir + 'T.pvd')     << Tn
 
 
 
