@@ -234,7 +234,7 @@ rho_W_0    = 400.0
 rho_A_0    = 0.0
 rho_C_0    = 0.0
 V_S_0      = 0.4 * V
-p_0        = 1e5#8e3
+p_0        = 8e3
 W_g        = 2.897e-2  # FIXME: need molecular weight of gas
 rho_g_0    = p_0 * W_g / (R * T_0)
 
@@ -328,7 +328,8 @@ delta_U3      = + dot(U3, B_inv(rho_W_mid, rho_A_mid)*phi) * dx \
 # gas mass balance residual :
 delta_rho_g   = + dudt(ep*rho_g(p, T), ep1*rho_g(p1, T1)) * psi * dx \
                 + div(U3) * psi * dx \
-                - (nu_g*r_Cg(rho_A_mid, T) + r_r(rho_A_mid, T_mid))*psi*dx
+                - (+ nu_g*r_Cg(rho_A_mid, T_mid) \
+                   + r_r(rho_A_mid, T_mid))*psi*dx
 
 # virgin solid wood mass balance :
 delta_rho_W   = + dudt(rho_W, rho_W1) * xi * dx \
