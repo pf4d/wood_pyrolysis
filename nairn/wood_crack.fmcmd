@@ -1,27 +1,29 @@
 ! ********** Introduction **********
 
 ! ********** Preamble Section **********
-Title "MPM Analysis Title"
-Name "MPM Analyst's Name"
+Title "MPM analysis of wood cracking"
+Name "Evan M. Cummings"
 
 ! Header
 Header
-   MPM Analysis using NairnFEAMPM and NairnMPM
+   MPM Analysis using NairnMPM
 EndHeader
 
 Analysis "Plane Strain MPM"
-MPMMethod USAVG,GIMP
+MPMMethod USAVG,CPDI
 Archive "Results/MPM"
 TimeStep 0.0001, 0.01, 0.5 
-ArchiveTime 1
-MaximumTime 10
+ArchiveTime 0.001
+MaximumTime 100
+Processors 4
 
 ! ********** Parameters Section **********
 #cell=5                 ! cell size (square cells)
 #width=100              ! Width of object in mm (mult of cell)
 #height=50              ! Height in mm (mult of cell)
 #thickness=1            ! Thickness in mm
-#border=2				! cells around the edges
+#border_x=20		! cells around the edges
+#border_y=2		! cells around the edges
 
 
 ! ********** Materials Section **********
@@ -34,10 +36,10 @@ Material #matname$,"Wood","Isotropic"
 Done
 
 ! ********** Grid and Material Points Section **********
-GridHoriz (#width+2*#border*#cell)/#cell
-GridVert (#height+2*#border*#cell)/#cell
+GridHoriz (#width+2*#border_x*#cell)/#cell
+GridVert (#height+2*#border_y*#cell)/#cell
 GridThickness #thickness
-GridRect -#border*#cell,#width+#border*#cell,-#border*#cell,#height+#border*#cell
+GridRect -#border_x*#cell,#width+#border_x*#cell,-#border_y*#cell,#height+#border_y*#cell
 
 Region #matname$,0,0,#thickness
   Rect 0,#width,0,#height
@@ -47,12 +49,23 @@ EndRegion
 
 ! ********** Boundary Condition Section **********
 
+
 ParticleBC
-  Rect 0, 20, 0, #height
-  Load x,constant, -10
+  Rect 0, 2, 0, #height
+  !Traction x, 4, function, "-100*exp(t)"
+  if t > 1
+    Load x, function, "-200"
+  else
+    Load x, function, "-200"
 EndParticleBC
 
 ParticleBC
-  Rect #width-20, #width, 0, #height
-  Load x,constant, 10
+  Rect #width-2, #width, 0, #height
+  !Traction x, 2, function, "100*exp(t)"
+  if t > 1
+    Load x, function, "200"
+  else
+    Load x, function, "200"
 EndParticleBC
+
+
