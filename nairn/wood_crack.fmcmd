@@ -12,15 +12,15 @@ EndHeader
 Analysis "Plane Strain MPM"
 MPMMethod USAVG,CPDI
 Archive "Results/MPM"
-TimeStep 0.0001, 0.01, 0.5 
-ArchiveTime 0.001
-MaximumTime 100
-Processors 4
+TimeStep 0.000002, 0.01, 0.5 
+ArchiveTime 0.000002
+MaximumTime 0.01
+Processors 8
 
 ! ********** Parameters Section **********
-#cell=5                 ! cell size (square cells)
-#width=100              ! Width of object in mm (mult of cell)
-#height=50              ! Height in mm (mult of cell)
+#cell=0.002             ! cell size (square cells)
+#width=0.05             ! Width of object in mm (mult of cell)
+#height=0.03            ! Height in mm (mult of cell)
 #thickness=1            ! Thickness in mm
 #border_x=20		! cells around the edges
 #border_y=2		! cells around the edges
@@ -29,10 +29,10 @@ Processors 4
 ! ********** Materials Section **********
 #matname$="wood"
 Material #matname$,"Wood","Isotropic"
-  E 500
-  nu 0.08
+  E 10600
+  nu 0.33
   a 60
-  rho 0.3
+  rho 1.5
 Done
 
 ! ********** Grid and Material Points Section **********
@@ -46,26 +46,26 @@ Region #matname$,0,0,#thickness
 EndRegion
 
 ! ********** Optional Calculations Section **********
-
+ 
 ! ********** Boundary Condition Section **********
 
 
 ParticleBC
-  Rect 0, 2, 0, #height
-  !Traction x, 4, function, "-100*exp(t)"
-  if t > 1
-    Load x, function, "-200"
-  else
-    Load x, function, "-200"
+  Rect 0, #cell, 0, #height
+  !Traction x, 4, function, "-exp(t)"
+  Load x, function, "1"
+  !if t > 1
+  !  Load x, function, "1"
+  !else
+  !  Load x, function, "t"
 EndParticleBC
 
 ParticleBC
-  Rect #width-2, #width, 0, #height
-  !Traction x, 2, function, "100*exp(t)"
-  if t > 1
-    Load x, function, "200"
-  else
-    Load x, function, "200"
+  Rect #width-#cell, #width, 0, #height
+  !Traction x, 2, function, "exp(t)"
+  Load x, function, "-1"
+  !if t > 1
+  !  Load x, function, "-1"
+  !else
+  !  Load x, function, "-t"
 EndParticleBC
-
-
