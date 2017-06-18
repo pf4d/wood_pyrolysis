@@ -14,7 +14,7 @@ MPMMethod USAVG,CPDI
 Archive "Results/MPM"
 TimeStep 0.000002, 0.01, 0.5 
 ArchiveTime 0.000002
-MaximumTime 0.01
+MaximumTime 0.002
 Processors 2
 
 ! ********** Parameters Section **********
@@ -24,15 +24,16 @@ Processors 2
 #thickness=1            ! Thickness in mm
 #border_x=20		! cells around the edges
 #border_y=2		! cells around the edges
-#force=1500
+#force=500
 
 ! ********** Materials Section **********
 #matname$="wood"
-Material #matname$,"Wood","Isotropic"
+Material #matname$,"Wood", "IsoPlasticity"
   E 10600
   nu 0.33
   a 60
   rho 1.5
+  yield 500
 Done
 
 ! ********** Grid and Material Points Section **********
