@@ -68,7 +68,7 @@ dt         = 0.2                        # time step
 t0         = 0.0                        # start time
 t          = t0                         # current time
 t1         = dt                         # equilibrium time
-tf         = 63.0                       # final time
+tf         = 31.0                       # final time
 
 # file output :
 out_dir    = './output/'
@@ -458,6 +458,54 @@ def plot(U,t):
                 show                = False,
                 extend              = 'max',
                 cb_format           = '%.3f')
+  
+  plot_variable(u = rho_Wn, name = 'rho_W%g' % t, direc = plt_dir,
+                ext                 = '.pdf',
+                title               = r'$\rho_{\mathrm{W}}\Big|_{t=%g}$' % t,
+                levels              = None,
+                numLvls             = 9,
+                scale               = 'lin',
+                cmap                = 'viridis',
+                tp                  = True,
+                show                = False,
+                extend              = 'neither',
+                cb_format           = '%.1f')
+  
+  plot_variable(u = rho_An, name = 'rho_A%g' % t, direc = plt_dir,
+                ext                 = '.pdf',
+                title               = r'$\rho_{\mathrm{A}}\Big|_{t=%g}$' % t,
+                levels              = None,
+                numLvls             = 9,
+                scale               = 'lin',
+                cmap                = 'viridis',
+                tp                  = True,
+                show                = False,
+                extend              = 'neither',
+                cb_format           = '%.1f')
+  
+  plot_variable(u = rho_Cn, name = 'rho_C%g' % t, direc = plt_dir,
+                ext                 = '.pdf',
+                title               = r'$\rho_{\mathrm{C}}\Big|_{t=%g}$' % t,
+                levels              = None,
+                numLvls             = 9,
+                scale               = 'lin',
+                cmap                = 'viridis',
+                tp                  = True,
+                show                = False,
+                extend              = 'neither',
+                cb_format           = '%.1f')
+  
+  plot_variable(u = Tn, name = 'T%g' % t, direc = plt_dir,
+                ext                 = '.pdf',
+                title               = r'$T\Big|_{t=%g}$' % t,
+                levels              = None,
+                numLvls             = 9,
+                scale               = 'lin',
+                cmap                = 'viridis',
+                tp                  = True,
+                show                = False,
+                extend              = 'neither',
+                cb_format           = '%.1f')
 
 # start the timer :
 start_time = time()
