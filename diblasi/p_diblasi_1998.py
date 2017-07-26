@@ -11,6 +11,7 @@ mpl.rcParams['text.latex.preamble']  = ['\usepackage[mathscr]{euscript}']
 #mpl.rcParams['contour.negative_linestyle']   = 'solid'
 
 parameters['form_compiler']['quadrature_degree'] = 2
+parameters['plotting_backend']                   = 'matplotlib'
 
 # constants :
 R          = 8.3144      # universal gas constant
@@ -399,7 +400,7 @@ problem = NonlinearVariationalProblem(delta, U, J=J, bcs=bcs,
 solver  = NonlinearVariationalSolver(problem)
 solver.parameters.update(params)
 
-def plot(U,t):
+def plot_solution(U,t):
   """
   function saves a nice plot of the function ``U`` at time ``t``.
   """
@@ -589,7 +590,7 @@ for t in times:
   print_text(s % (t, time()-tic), 'red', 1)
 
   # save a plot :
-  if t in plot_times: plot(U,t)
+  if t in plot_times: plot_solution(U,t)
   
   # for the subsequent iteration, reset the parameters to normal :
   if adaptive:

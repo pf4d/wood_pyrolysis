@@ -5,6 +5,8 @@ from ufl                     import indexed
 from matplotlib              import colors, ticker
 from matplotlib.ticker       import LogFormatter, ScalarFormatter
 from mpl_toolkits.axes_grid1 import make_axes_locatable, inset_locator
+import matplotlib.pyplot         as plt
+import matplotlib.tri            as tri
 import os
 
 def print_text(text, color='white', atrb=0, cls=None):
@@ -69,6 +71,10 @@ def print_min_max(u, title, color='97'):
          + ", array, int or float, not %s." % type(u)
     print_text(er, 'red', 1)
 
+def mesh2triang(mesh):
+    xy = mesh.coordinates()
+    return tri.Triangulation(xy[:, 0], xy[:, 1], mesh.cells())
+
 
 def plot_variable(u, name, direc, 
                   figsize             = (8,7),
@@ -121,7 +127,10 @@ def plot_variable(u, name, direc,
       v1       = v1 / v2_mag
   elif len(u.ufl_shape) == 0:
     mesh     = u.function_space().mesh()
-    v        = u.compute_vertex_values(mesh)
+    if u.vector().size() == mesh.num_cells():
+      v       = u.vector().array()
+    else:
+      v       = u.compute_vertex_values(mesh)
   x    = mesh.coordinates()[:,0]
   y    = mesh.coordinates()[:,1]
   t    = mesh.cells()
@@ -189,14 +198,17 @@ def plot_variable(u, name, direc,
     ax.axis('off')
   if equal_axes:
     ax.axis('equal')
-    
+
   if contour_type == 'filled':
-    if scale != 'log':
+    if u.vector().size() == mesh.num_cells():
+      cs = ax.tripcolor(mesh2triang(mesh), v, shading='flat',
+                        cmap=cmap, norm=norm)
+    elif u.vector().size() != mesh.num_cells() and scale != 'log':
       cs = ax.tricontourf(x, y, t, v, levels=levels, 
-                         cmap=cmap, norm=norm, extend=extend)
-    else:
+                          cmap=cmap, norm=norm, extend=extend)
+    elif u.vector().size() != mesh.num_cells() and scale == 'log':
       cs = ax.tricontourf(x, y, t, v, levels=levels, 
-                         cmap=cmap, norm=norm)
+                          cmap=cmap, norm=norm)
   elif contour_type == 'lines':
     cs = ax.tricontour(x, y, t, v, linewidths=2.0,
                        levels=levels, colors='k') 
@@ -256,4 +268,23 @@ def plot_variable(u, name, direc,
   if show:
     plt.show()
   plt.close(fig)
+
+def plot_new(obj):
+    plt.gca().set_aspect('equal')
+    if isinstance(obj, Function):
+        mesh = obj.function_space().mesh()
+        if (mesh.geometry().dim() != 2):
+            raise(AttributeError)
+        if obj.vector().size() == mesh.num_cells():
+            C = obj.vector().array()
+            plt.tripcolor(mesh2triang(mesh), C)
+        else:
+            C = obj.compute_vertex_values(mesh)
+            plt.tripcolor(mesh2triang(mesh), C, shading='gouraud')
+    elif isinstance(obj, Mesh):
+        if (obj.geometry().dim() != 2):
+            raise(AttributeError)
+        plt.triplot(mesh2triang(obj), color='k')
+
+
 
